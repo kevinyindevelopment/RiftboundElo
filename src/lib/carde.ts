@@ -31,7 +31,68 @@ export class CardeError extends Error {
 
 let cachedToken: string | null = process.env.CARDE_TOKEN?.trim() || null;
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// ---- Throughput control --------------------------------------------------
+// All requests pass through a global rate gate (spaces request *starts* to a
+// target requests/sec) and an in-flight cap. Concurrency lets slow responses
+// overlap; the rate gate keeps total throughput polite. Tune via env.
+const RPS = Number(process.env.INGEST_RPS ?? 10); // requests per second
+const MAX_CONCURRENCY = Number(process.env.INGEST_CONCURRENCY ?? 8);
+const minInterval = RPS > 0 ? 1000 / RPS : 0;
+let nextSlot = 0;
+let active = 0;
+const waiters: Array<() => void> = [];
+
+async function acquireSlot() {
+  if (active >= MAX_CONCURRENCY) {
+    await new Promise<void>((res) => waiters.push(res));
+  }
+  active++;
+  // Space out request starts to honor RPS.
+  const now = Date.now();
+  const slot = Math.max(now, nextSlot);
+  nextSlot = slot + minInterval;
+  const wait = slot - now;
+  if (wait > 0) await sleep(wait);
+}
+function releaseSlot() {
+  active--;
+  waiters.shift()?.();
+}
+
+/** Run `worker` over `items` with bounded concurrency (rate gate handles RPS). */
+export async function pool<T, R>(
+  items: T[],
+  worker: (item: T, index: number) => Promise<R>,
+  concurrency = MAX_CONCURRENCY,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let i = 0;
+  const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    for (;;) {
+      const idx = i++;
+      if (idx >= items.length) return;
+      results[idx] = await worker(items[idx], idx);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
 async function request<T = unknown>(
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
+  await acquireSlot();
+  try {
+    return await doRequest<T>(path, init);
+  } finally {
+    releaseSlot();
+  }
+}
+
+async function doRequest<T = unknown>(
   path: string,
   init: RequestInit = {},
 ): Promise<T> {
@@ -198,17 +259,21 @@ export async function searchEvents(opts: {
   storeId?: number | string;
   statuses?: DisplayStatus[];
   gameSlug?: string;
+  startDateAfter?: string; // ISO — window events by start date (server-side)
+  startDateBefore?: string;
   page?: number;
   pageSize?: number;
 }): Promise<Paginated<V2Event>> {
   const q = new URLSearchParams();
   q.set("game_slug", opts.gameSlug ?? "riftbound");
   if (opts.storeId != null) q.set("store_id", String(opts.storeId));
+  if (opts.startDateAfter) q.set("start_date_after", opts.startDateAfter);
+  if (opts.startDateBefore) q.set("start_date_before", opts.startDateBefore);
   for (const s of opts.statuses ?? ["completed", "upcoming", "inProgress"]) {
     q.append("display_statuses", s);
   }
   q.set("page", String(opts.page ?? 1));
-  q.set("page_size", String(opts.pageSize ?? 50));
+  q.set("page_size", String(opts.pageSize ?? 100));
   return request<Paginated<V2Event>>(`/api/v2/events/?${q}`);
 }
 

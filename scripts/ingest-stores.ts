@@ -23,14 +23,12 @@ import {
   getEventDetail,
   getRoundMatches,
   getRoundStandings,
+  pool,
   type V2Event,
   type V2Store,
   type V2Match,
   type V2UserEventStatus,
 } from "../src/lib/carde";
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const RATE_MS = Number(process.env.INGEST_RATE_MS ?? 350);
 
 // Default to the user's local Saginaw/Bay-area stores.
 const DEFAULT_NEAR = { lat: 43.4195, lon: -83.9508, miles: 40 };
@@ -43,6 +41,8 @@ function parseArgs(argv: string[]) {
     results: true, // fetch rosters/records/matches by default
     full: false, // re-fetch results even for unchanged completed events
     discover: false, // run geo-discovery to find new stores
+    global: false, // nationwide date-windowed delta (ignores stores)
+    sinceDays: 21, // global window: events starting within the last N days
   };
   for (let i = 0; i < argv.length; i++) {
     const t = argv[i];
@@ -59,6 +59,10 @@ function parseArgs(argv: string[]) {
       a.full = true; // ignore incremental skip; re-fetch all results
     } else if (t === "--discover") {
       a.discover = true; // run geo-discovery for new stores near you
+    } else if (t === "--global") {
+      a.global = true; // nationwide date-windowed delta sync
+    } else if (t === "--since-days") {
+      a.sinceDays = Number(argv[++i]) || a.sinceDays;
     }
   }
   return a;
@@ -248,8 +252,24 @@ async function ingestEventResults(eventId: number) {
           topCut: detail.top_cut_size ?? undefined,
         },
       });
-      for (const round of rounds) {
-        const roundMatches = await getRoundMatches(round.id);
+      // Fetch all rounds' matches + the final standings CONCURRENTLY (API is
+      // the bottleneck); DB writes below stay serialized for SQLite safety.
+      const finalRound = rounds.reduce(
+        (best, r) => (r.round_number > (best?.round_number ?? -1) ? r : best),
+        rounds[0],
+      );
+      const [roundResults, standingsRes] = await Promise.all([
+        pool(rounds, (r) =>
+          getRoundMatches(r.id)
+            .then((ms) => ({ round: r, ms }))
+            .catch(() => ({ round: r, ms: [] as V2Match[] })),
+        ),
+        finalRound
+          ? getRoundStandings(finalRound.id).catch(() => ({ standings: [] }))
+          : Promise.resolve({ standings: [] }),
+      ]);
+
+      for (const { round, ms: roundMatches } of roundResults) {
         for (const m of roundMatches) {
           const pmrs = [...m.player_match_relationships].sort(
             (a, b) => (a.player_order ?? 0) - (b.player_order ?? 0),
@@ -296,16 +316,10 @@ async function ingestEventResults(eventId: number) {
           });
           matches++;
         }
-        await sleep(RATE_MS);
       }
 
-      // Official standings + tiebreakers from the final round.
-      const finalRound = rounds.reduce(
-        (best, r) => (r.round_number > (best?.round_number ?? -1) ? r : best),
-        rounds[0],
-      );
-      if (finalRound) {
-        const { standings } = await getRoundStandings(finalRound.id);
+      {
+        const { standings } = standingsRes;
         for (const s of standings ?? []) {
           const pid = String(s.player?.id);
           if (!pid || pid === "undefined") continue;
@@ -329,7 +343,6 @@ async function ingestEventResults(eventId: number) {
             },
           });
         }
-        await sleep(RATE_MS);
       }
     } catch {
       /* round/match data gated */
@@ -348,11 +361,10 @@ function timeMs(d: Date | null | undefined): number | null {
 }
 
 async function ingestStore(storeId: number, opts: { results: boolean; full: boolean }) {
-  let total = 0;
-  let fetched = 0;
-  let skipped = 0;
   let storeName = `store ${storeId}`;
   const seen = new Set<number>();
+  let skipped = 0;
+  const toFetch: number[] = []; // events needing the (expensive) result chain
 
   // Prefetch what we already have for this store to drive incremental sync.
   const existing = new Map<string, number | null>();
@@ -363,10 +375,11 @@ async function ingestStore(storeId: number, opts: { results: boolean; full: bool
     existing.set(ev.id, timeMs(ev.sourceUpdatedAt));
   }
 
+  // Pass 1: page listings, refresh metadata, decide what needs a deep fetch.
   for (const status of STATUSES) {
     let page = 1;
     for (;;) {
-      const res = await searchEvents({ storeId, statuses: [status], page, pageSize: 50 });
+      const res = await searchEvents({ storeId, statuses: [status], page, pageSize: 100 });
       const events = res.results ?? [];
       if (events.length === 0) break;
       for (const e of events) {
@@ -376,44 +389,38 @@ async function ingestStore(storeId: number, opts: { results: boolean; full: bool
           await upsertStore(e.store);
           storeName = e.store.name;
         }
-
-        // Decide whether the expensive result-fetch is worth doing.
         const isCompleted = /complete/i.test(status);
         const isUpcoming = /upcoming/i.test(status);
         const prev = existing.get(String(e.id));
         const apiUpdated = e.updated_at ? new Date(e.updated_at).getTime() : null;
         const changed = prev == null || apiUpdated == null || prev !== apiUpdated;
 
-        await upsertEvent(e); // always refresh cheap metadata (counts, status…)
-        total++;
+        await upsertEvent(e); // cheap metadata refresh
 
-        // Completed + unchanged → skip the whole result chain. Upcoming has no
-        // results yet. In-progress / new / changed events get a full fetch.
         const fetchResults =
           opts.results && !isUpcoming && (opts.full || changed || !isCompleted);
-        if (!fetchResults) {
-          if (opts.results && isCompleted) skipped++;
-          continue;
-        }
-
-        const extra = await ingestEventResults(e.id);
-        fetched++;
-        if (extra.players || extra.matches) {
-          console.log(
-            `    event ${e.id}: +${extra.players} players` +
-              (extra.matches ? `, ${extra.matches} matches` : "") +
-              (extra.hasResults ? " ✓results" : ""),
-          );
-        }
-        await sleep(RATE_MS);
+        if (fetchResults) toFetch.push(e.id);
+        else if (opts.results && isCompleted) skipped++;
       }
       if (!res.next) break;
       page++;
-      await sleep(RATE_MS);
     }
   }
-  console.log(`✓ ${storeName}: ${total} events (${fetched} fetched, ${skipped} unchanged-skipped)`);
-  return total;
+
+  // Pass 2: deep-fetch results CONCURRENTLY for the events that need it.
+  await pool(toFetch, async (id) => {
+    const extra = await ingestEventResults(id);
+    if (extra.players || extra.matches) {
+      console.log(
+        `    event ${id}: +${extra.players} players` +
+          (extra.matches ? `, ${extra.matches} matches` : "") +
+          (extra.hasResults ? " ✓results" : ""),
+      );
+    }
+  });
+
+  console.log(`✓ ${storeName}: ${seen.size} events (${toFetch.length} fetched, ${skipped} unchanged-skipped)`);
+  return seen.size;
 }
 
 async function discoverStores(lat: number, lon: number, miles: number): Promise<number[]> {
@@ -432,18 +439,94 @@ async function discoverStores(lat: number, lon: number, miles: number): Promise<
       });
       for (const e of res.results ?? []) if (e.store) ids.add(e.store.id);
       if (!res.next) break;
-      await sleep(RATE_MS);
     }
   }
   return [...ids];
 }
 
+/**
+ * Nationwide/regional delta sync: instead of iterating stores, query ALL
+ * Riftbound events in a recent start-date window (covers new + recently-finished
+ * events whose results just published), then deep-fetch only the changed ones.
+ * Cost scales with the delta, not the total dataset.
+ */
+async function ingestGlobalWindow(opts: { full: boolean; sinceDays: number }) {
+  const since = new Date(Date.now() - opts.sinceDays * 86400_000).toISOString();
+  console.log(`Global delta: events starting since ${since.slice(0, 10)} (last ${opts.sinceDays}d)…`);
+
+  const seen = new Set<number>();
+  const toFetch: number[] = [];
+  let listed = 0;
+
+  for (const status of STATUSES) {
+    let page = 1;
+    for (;;) {
+      const res = await searchEvents({
+        statuses: [status],
+        startDateAfter: since,
+        page,
+        pageSize: 100,
+      });
+      const events = res.results ?? [];
+      if (events.length === 0) break;
+
+      // Batch-read prior timestamps for this page to detect changes.
+      const ids = events.map((e) => String(e.id));
+      const prior = new Map<string, number | null>();
+      for (const ev of await prisma.event.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, sourceUpdatedAt: true },
+      })) {
+        prior.set(ev.id, timeMs(ev.sourceUpdatedAt));
+      }
+
+      for (const e of events) {
+        if (seen.has(e.id)) continue;
+        seen.add(e.id);
+        listed++;
+        if (e.store) await upsertStore(e.store);
+        await upsertEvent(e);
+
+        const isCompleted = /complete/i.test(status);
+        const isUpcoming = /upcoming/i.test(status);
+        const prev = prior.get(String(e.id));
+        const apiUpdated = e.updated_at ? new Date(e.updated_at).getTime() : null;
+        const changed = prev == null || apiUpdated == null || prev !== apiUpdated;
+        if (!isUpcoming && (opts.full || changed || !isCompleted)) toFetch.push(e.id);
+      }
+      if (!res.next) break;
+      page++;
+    }
+  }
+
+  console.log(`Listed ${listed} events in window; deep-fetching ${toFetch.length} new/changed…`);
+  let withResults = 0;
+  await pool(toFetch, async (id) => {
+    const extra = await ingestEventResults(id);
+    if (extra.hasResults) withResults++;
+  });
+  console.log(`Global delta done: ${listed} listed, ${toFetch.length} fetched, ${withResults} had results.`);
+  return seen.size;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const authed = await ensureAuth().catch(() => false);
+  await ensureAuth().catch(() => false);
   console.log(
     hasToken() ? "Authenticated to carde.io." : "No token set — results will be limited.",
   );
+
+  if (args.global) {
+    await ingestGlobalWindow({ full: args.full, sinceDays: args.sinceDays });
+    await assignAllRegions(true);
+    const counts = {
+      stores: await prisma.store.count(),
+      events: await prisma.event.count(),
+      players: await prisma.player.count(),
+    };
+    console.log("\nDB now:", counts);
+    return;
+  }
 
   let storeIds = args.stores;
   if (storeIds.length === 0) {
@@ -466,7 +549,6 @@ async function main() {
   let grand = 0;
   for (const id of storeIds) {
     grand += await ingestStore(id, { results: args.results, full: args.full });
-    await sleep(RATE_MS);
   }
 
   // Keep store/player region assignments in sync with the latest data.
