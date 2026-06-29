@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { getStore } from "@/lib/queries";
 import { PageTitle } from "@/components/ui";
 import { EventList } from "@/components/events";
+import { RegionBadge } from "@/components/region-tabs";
 
 export const dynamic = "force-dynamic";
 
@@ -22,12 +23,17 @@ export default async function StorePage({
   return (
     <div className="space-y-6">
       <div className="flex items-baseline justify-between gap-4 flex-wrap">
-        <PageTitle
-          title={store.name}
-          subtitle={[store.address, [store.city, store.state, store.country].filter(Boolean).join(", ")]
-            .filter(Boolean)
-            .join(" · ")}
-        />
+        <div>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold tracking-tight">{store.name}</h1>
+            <RegionBadge region={store.region} />
+          </div>
+          <p className="text-muted text-sm mt-1">
+            {[store.address, [store.city, store.state, store.country].filter(Boolean).join(", ")]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+        </div>
         <Link href="/stores" className="text-sm text-accent-2 hover:underline">← All stores</Link>
       </div>
 

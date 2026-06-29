@@ -19,7 +19,7 @@ model Player {
   firstName   String?
   lastName    String?
   country     String?
-  region      String?  // state/province if known
+  region      String?  // home region: "tri-cities" | "flint" | "other"
 
   // Current rating snapshot (recomputed from matches).
   rating      Int      @default(1000)
@@ -52,9 +52,11 @@ model Store {
   website   String?
   latitude  Float?
   longitude Float?
+  region    String?  // "tri-cities" | "flint" | "other"
   events    Event[]
 
   @@index([country])
+  @@index([region])
 }
 
 /// A tournament/event pulled from carde.io magic-events.

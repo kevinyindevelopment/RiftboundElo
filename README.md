@@ -92,6 +92,7 @@ npm run ingest:stores -- --full              # force re-fetch everything (ignore
 npm run ingest:stores -- --meta-only         # metadata only, no rosters/matches
 
 npm run elo:recompute                         # rebuild ratings after new matches
+npm run regions                               # (re)assign stores+players to regions
 
 # Inspect what your token can read for a given event id:
 npm run probe -- --event 199693

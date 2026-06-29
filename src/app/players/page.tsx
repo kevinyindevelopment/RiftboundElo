@@ -1,25 +1,32 @@
 import { getPlayersByAttendance, hasEloData } from "@/lib/queries";
 import { Card, PageTitle, PlayerLink } from "@/components/ui";
+import { RegionTabs } from "@/components/region-tabs";
 import { pct, winRate } from "@/lib/format";
+import { isRegion, REGION_LABELS } from "@/lib/regions";
 
 export const dynamic = "force-dynamic";
 
-export default async function PlayersPage() {
+export default async function PlayersPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ region?: string }>;
+}) {
+  const { region } = await searchParams;
   const [players, elo] = await Promise.all([
-    getPlayersByAttendance(400),
+    getPlayersByAttendance(400, region),
     hasEloData(),
   ]);
+  const scope = isRegion(region) ? `${REGION_LABELS[region]} · ` : "";
 
   return (
     <div>
       <PageTitle
         title="Players"
-        subtitle={
-          elo
-            ? `${players.length} players`
-            : `${players.length} players · ranked by event attendance until match results are available`
-        }
+        subtitle={`${scope}${players.length} players${elo ? "" : " · ranked by event attendance"}`}
       />
+      <div className="mb-4">
+        <RegionTabs basePath="/players" current={region} />
+      </div>
 
       {players.length === 0 ? (
         <Card className="px-6 py-10 text-center text-muted">

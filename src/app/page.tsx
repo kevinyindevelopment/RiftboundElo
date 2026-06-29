@@ -2,20 +2,23 @@ import Link from "next/link";
 import {
   getGlobalStats,
   getRecentEvents,
+  getRegionSummary,
   getStores,
   getUpcomingEvents,
 } from "@/lib/queries";
 import { Card, StatCard } from "@/components/ui";
 import { EventList } from "@/components/events";
+import { REGION_LABELS, REGION_SUBTITLES, type Region } from "@/lib/regions";
 
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
-  const [stats, upcoming, recent, stores] = await Promise.all([
+  const [stats, upcoming, recent, stores, regions] = await Promise.all([
     getGlobalStats(),
     getUpcomingEvents(8),
     getRecentEvents(8),
     getStores(),
+    getRegionSummary(),
   ]);
 
   const topStores = [...stores]
@@ -30,8 +33,24 @@ export default async function HomePage() {
         </h1>
         <p className="text-muted mt-1">
           Your personal Riftbound tracker — local events, stores, players, and an
-          Elo ladder that fills in from the games you play.
+          Elo ladder, split across the Tri Cities, Flint, and beyond.
         </p>
+      </section>
+
+      <section className="grid sm:grid-cols-3 gap-3">
+        {regions.map((r) => (
+          <Link key={r.region} href={`/rankings?region=${r.region}`}>
+            <Card className="px-4 py-4 hover:bg-surface-2/50 transition-colors h-full">
+              <div className="text-lg font-semibold">{REGION_LABELS[r.region as Region]}</div>
+              <div className="text-xs text-muted">{REGION_SUBTITLES[r.region as Region]}</div>
+              <div className="mt-3 flex gap-4 text-sm text-muted">
+                <span><span className="text-accent font-semibold tabular-nums">{r.rankedPlayers}</span> ranked</span>
+                <span><span className="text-foreground tabular-nums">{r.stores}</span> stores</span>
+                <span><span className="text-foreground tabular-nums">{r.events}</span> events</span>
+              </div>
+            </Card>
+          </Link>
+        ))}
       </section>
 
       <section className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3">

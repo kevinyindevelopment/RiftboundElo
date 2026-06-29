@@ -1,9 +1,18 @@
 import { prisma } from "@/lib/prisma";
+import { isRegion } from "@/lib/regions";
 
-/** Top players by rating (the nationwide ladder). Requires >=1 game played. */
-export async function getLeaderboard(limit = 100, offset = 0) {
+/** Narrow a query by region, or {} for "all". */
+function playerRegion(region?: string) {
+  return isRegion(region) ? { region } : {};
+}
+function eventRegion(region?: string) {
+  return isRegion(region) ? { store: { region } } : {};
+}
+
+/** Top players by Elo, optionally filtered to one region. */
+export async function getLeaderboard(limit = 100, region?: string, offset = 0) {
   return prisma.player.findMany({
-    where: { gamesPlayed: { gt: 0 } },
+    where: { gamesPlayed: { gt: 0 }, ...playerRegion(region) },
     orderBy: [{ rating: "desc" }, { gamesPlayed: "desc" }],
     take: limit,
     skip: offset,
@@ -24,18 +33,18 @@ export async function getGlobalStats() {
 
 const now = () => new Date();
 
-export async function getUpcomingEvents(limit = 12) {
+export async function getUpcomingEvents(limit = 12, region?: string) {
   return prisma.event.findMany({
-    where: { startDatetime: { gte: now() } },
+    where: { startDatetime: { gte: now() }, ...eventRegion(region) },
     orderBy: { startDatetime: "asc" },
     take: limit,
     include: { store: true },
   });
 }
 
-export async function getRecentEvents(limit = 12) {
+export async function getRecentEvents(limit = 12, region?: string) {
   return prisma.event.findMany({
-    where: { startDatetime: { lt: now() } },
+    where: { startDatetime: { lt: now() }, ...eventRegion(region) },
     orderBy: { startDatetime: "desc" },
     take: limit,
     include: { store: true, _count: { select: { entries: true } } },
@@ -62,8 +71,9 @@ export async function getStore(id: string) {
 }
 
 /** Players ranked by event attendance (used when no Elo data exists yet). */
-export async function getPlayersByAttendance(limit = 300) {
+export async function getPlayersByAttendance(limit = 300, region?: string) {
   const players = await prisma.player.findMany({
+    where: { ...playerRegion(region) },
     include: { _count: { select: { entries: true } } },
     take: 1000,
   });
@@ -74,6 +84,19 @@ export async function getPlayersByAttendance(limit = 300) {
 
 export async function hasEloData(): Promise<boolean> {
   return (await prisma.match.count()) > 0;
+}
+
+/** Per-region tallies for the home dashboard. */
+export async function getRegionSummary() {
+  const { REGION_ORDER } = await import("@/lib/regions");
+  return Promise.all(
+    REGION_ORDER.map(async (region) => ({
+      region,
+      stores: await prisma.store.count({ where: { region } }),
+      events: await prisma.event.count({ where: { store: { region } } }),
+      rankedPlayers: await prisma.player.count({ where: { region, gamesPlayed: { gt: 0 } } }),
+    })),
+  );
 }
 
 export async function getPlayer(id: string) {

@@ -13,6 +13,7 @@
  */
 import "dotenv/config";
 import { prisma } from "../src/lib/prisma";
+import { assignAllRegions } from "./assign-regions";
 import {
   ensureAuth,
   hasToken,
@@ -467,6 +468,9 @@ async function main() {
     grand += await ingestStore(id, { results: args.results, full: args.full });
     await sleep(RATE_MS);
   }
+
+  // Keep store/player region assignments in sync with the latest data.
+  await assignAllRegions(true);
 
   const counts = {
     stores: await prisma.store.count(),

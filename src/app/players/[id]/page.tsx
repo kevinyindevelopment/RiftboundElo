@@ -16,6 +16,7 @@ import {
   StatCard,
 } from "@/components/ui";
 import { fmtDate, ordinal, pct, winRate } from "@/lib/format";
+import { isRegion, REGION_LABELS } from "@/lib/regions";
 
 export const dynamic = "force-dynamic";
 
@@ -52,7 +53,7 @@ export default async function PlayerPage({
             {player.handle && player.displayName && player.handle !== player.displayName
               ? player.displayName
               : ""}
-            {player.country ? ` · ${player.country}` : ""}
+            {isRegion(player.region) ? ` · ${REGION_LABELS[player.region]}` : ""}
             {!rated && " · unrated (no match results yet)"}
           </p>
         </div>

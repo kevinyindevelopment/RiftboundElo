@@ -1,36 +1,38 @@
 import Link from "next/link";
 import { getLeaderboard } from "@/lib/queries";
 import { Card, PageTitle, PlayerLink } from "@/components/ui";
+import { RegionTabs } from "@/components/region-tabs";
 import { pct, winRate } from "@/lib/format";
+import { isRegion, REGION_LABELS, REGION_SUBTITLES } from "@/lib/regions";
 
 export const dynamic = "force-dynamic";
 
-export default async function RankingsPage() {
-  const players = await getLeaderboard(200);
+export default async function RankingsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ region?: string }>;
+}) {
+  const { region } = await searchParams;
+  const players = await getLeaderboard(200, region);
+
+  const subtitle = isRegion(region)
+    ? `${REGION_LABELS[region]} — ${REGION_SUBTITLES[region]}`
+    : "Everyone starts at 1000; points transfer from the loser to the winner of each rated match.";
 
   return (
     <div>
-      <PageTitle
-        title="Elo Rankings"
-        subtitle="Everyone starts at 1000; points transfer from the loser to the winner of each rated match."
-      />
+      <PageTitle title="Elo Rankings" subtitle={subtitle} />
+      <div className="mb-4">
+        <RegionTabs basePath="/rankings" current={region} />
+      </div>
 
       {players.length === 0 ? (
         <Card className="px-6 py-10 text-center">
-          <p className="text-lg font-medium">No rated matches yet.</p>
-          <p className="text-muted mt-2 max-w-xl mx-auto text-sm">
-            Match results are private to each event&apos;s participants on carde.io,
-            so the Elo ladder fills in from events <strong>you</strong> attend or
-            organize. Once results are ingested, run:
-          </p>
-          <pre className="mt-4 inline-block text-left bg-surface-2 rounded-lg px-4 py-3 text-sm text-accent-2">
-            npm run elo:recompute
-          </pre>
-          <p className="text-muted mt-4 text-sm">
-            Meanwhile, browse{" "}
-            <Link href="/events" className="text-accent-2 hover:underline">events</Link>,{" "}
-            <Link href="/stores" className="text-accent-2 hover:underline">stores</Link>, and{" "}
-            <Link href="/players" className="text-accent-2 hover:underline">players</Link>.
+          <p className="text-lg font-medium">No rated players in this region yet.</p>
+          <p className="text-muted mt-2 text-sm">
+            Try another region, or browse{" "}
+            <Link href="/events" className="text-accent-2 hover:underline">events</Link> and{" "}
+            <Link href="/stores" className="text-accent-2 hover:underline">stores</Link>.
           </p>
         </Card>
       ) : (
