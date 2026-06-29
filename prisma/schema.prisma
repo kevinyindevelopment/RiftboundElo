@@ -1,0 +1,189 @@
+// Riftbound Elo — data model
+// Source data is ingested from the carde.io / UVS "Hydra" backend; Elo is computed locally.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// A competitive player, keyed by their carde.io user id.
+model Player {
+  id          String   @id // carde.io user id (string/uuid)
+  handle      String?  // username / special_user_identifier
+  displayName String
+  firstName   String?
+  lastName    String?
+  country     String?
+  region      String?  // state/province if known
+
+  // Current rating snapshot (recomputed from matches).
+  rating      Int      @default(1000)
+  peakRating  Int      @default(1000)
+  gamesPlayed Int      @default(0)
+  wins        Int      @default(0)
+  losses      Int      @default(0)
+  draws       Int      @default(0)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  entries        EventEntry[]
+  matchesAsOne   Match[]        @relation("MatchPlayerOne")
+  matchesAsTwo   Match[]        @relation("MatchPlayerTwo")
+  ratingHistory  RatingChange[]
+
+  @@index([rating])
+  @@index([country])
+}
+
+/// A store / community hosting events.
+model Store {
+  id        String   @id // carde.io store id
+  name      String
+  country   String?
+  state     String?
+  city      String?
+  address   String?
+  website   String?
+  latitude  Float?
+  longitude Float?
+  events    Event[]
+
+  @@index([country])
+}
+
+/// A tournament/event pulled from carde.io magic-events.
+model Event {
+  id              String   @id // carde.io magic-event id
+  name            String
+  format          String?  // event_format / format_pretty
+  gameType        String?  // swiss, single elim, etc.
+  startDatetime   DateTime?
+  endDatetime     DateTime?
+  status          String?  // event_lifecycle_status / display_status
+  numPlayers      Int      @default(0) // registered_user_count
+  capacity        Int?
+  gameplayFormat  String?  // e.g. "Nexus Nights - 1v1"
+  eventType       String?
+  costCents       Int?
+  currency        String?
+  url             String?
+  isOnline        Boolean  @default(false)
+  description     String?
+  rulesEnforcement String? // CASUAL / COMPETITIVE / ...
+  numRounds       Int?
+  topCut          Int?
+  pointsPerWin    Int      @default(3)
+  pointsPerLoss   Int      @default(0)
+  pointsPerDraw   Int      @default(1)
+
+  storeId         String?
+  store           Store?   @relation(fields: [storeId], references: [id])
+
+  ingestedAt      DateTime @default(now())
+  sourceUpdatedAt DateTime? // carde `updated_at` at last ingest — drives incremental sync
+  resultsComplete Boolean  @default(false) // true once standings/matches ingested
+
+  entries EventEntry[]
+  matches Match[]
+
+  @@index([startDatetime])
+  @@index([storeId])
+}
+
+/// A deck archetype, identified by its Riftbound Legend (+ optional champion focus).
+model Deck {
+  id        String   @id // carde deck id, or synthesized legend slug
+  name      String
+  legend    String?  // primary Legend card name (archetype anchor)
+  champion  String?
+  domains   String?  // JSON array of domain symbols
+  format    String?
+  archetype String?  // human-friendly grouping
+
+  entries EventEntry[]
+
+  @@index([legend])
+  @@index([archetype])
+}
+
+/// A player's participation in one event, with the deck they ran.
+model EventEntry {
+  id            String  @id @default(cuid())
+  eventId       String
+  event         Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  playerId      String
+  player        Player  @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  deckId        String?
+  deck          Deck?   @relation(fields: [deckId], references: [id])
+
+  finalStanding Int?
+  matchPoints   Int?    // swiss points (carde), distinct from Elo
+  matchesWon    Int     @default(0)
+  matchesLost   Int     @default(0)
+  matchesDrawn  Int     @default(0)
+  omwPct        Float?  // opponent match-win % (tiebreaker)
+  gwPct         Float?  // game-win %
+  ogwPct        Float?  // opponent game-win %
+
+  @@unique([eventId, playerId])
+  @@index([deckId])
+}
+
+/// A single match (pairing result) within an event. Drives Elo.
+model Match {
+  id           String   @id // carde match id, or `${eventId}-r${round}-${slot}`
+  eventId      String
+  event        Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  roundNumber  Int?
+
+  playerOneId  String
+  playerOne    Player   @relation("MatchPlayerOne", fields: [playerOneId], references: [id], onDelete: Cascade)
+  playerTwoId  String
+  playerTwo    Player   @relation("MatchPlayerTwo", fields: [playerTwoId], references: [id], onDelete: Cascade)
+
+  // Game wins each side took; winnerId null => draw (or double-loss).
+  playerOneWins Int     @default(0)
+  playerTwoWins Int     @default(0)
+  draws         Int     @default(0)
+  winnerId      String? // playerOneId | playerTwoId | null
+  isBye         Boolean @default(false)
+
+  deckOneId     String?
+  deckTwoId     String?
+
+  playedAt      DateTime?
+
+  changes RatingChange[]
+
+  @@index([eventId, roundNumber])
+  @@index([playedAt])
+}
+
+/// Per-player rating delta from a single match — powers the Elo history curve.
+model RatingChange {
+  id           String   @id @default(cuid())
+  playerId     String
+  player       Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  matchId      String
+  match        Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  ratingBefore Int
+  ratingAfter  Int
+  delta        Int
+  createdAt    DateTime @default(now())
+
+  @@unique([playerId, matchId])
+  @@index([playerId, createdAt])
+}
+
+/// Tracks how far the event-id space has been crawled.
+model IngestState {
+  id            Int      @id @default(1)
+  lastEventId   Int      @default(0)
+  updatedAt     DateTime @updatedAt
+}
