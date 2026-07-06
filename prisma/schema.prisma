@@ -149,6 +149,7 @@ model EventEntry {
 
   @@unique([eventId, playerId])
   @@index([deckId])
+  @@index([playerId])
 }
 
 /// A single match (pairing result) within an event. Drives Elo.
@@ -179,6 +180,10 @@ model Match {
 
   @@index([eventId, roundNumber])
   @@index([playedAt])
+  // FK-column indexes: without these, deleting a player (or a cascade cleanup)
+  // seq-scans Match, and the player pages scan to find a player's matches.
+  @@index([playerOneId])
+  @@index([playerTwoId])
 }
 
 /// Per-player rating delta from a single match — powers the Elo history curve.
@@ -195,6 +200,9 @@ model RatingChange {
 
   @@unique([playerId, matchId])
   @@index([playerId, createdAt])
+  // Index the FK so cascade-deleting matches (every event re-ingest does this)
+  // doesn't seq-scan RatingChange — was O(n^2) and hung a cleanup.
+  @@index([matchId])
 }
 
 /// Tracks how far the event-id space has been crawled.
