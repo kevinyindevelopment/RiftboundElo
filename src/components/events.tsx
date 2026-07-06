@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Card } from "@/components/ui";
-import { fmtDate } from "@/lib/format";
+import { fmtDate, fmtDateTime } from "@/lib/format";
+import { LocalTime } from "@/components/local-time";
 
 type EventLike = {
   id: string;
@@ -42,9 +43,15 @@ function cost(cents?: number | null, currency?: string | null): string {
 export function EventList({ events }: { events: EventLike[] }) {
   if (events.length === 0)
     return <Card className="px-6 py-8 text-center text-muted">No events.</Card>;
+  const nowMs = Date.now();
   return (
     <Card className="divide-y divide-border/60">
-      {events.map((e) => (
+      {events.map((e) => {
+        // Upcoming events show the start time; past events just the date.
+        const upcoming =
+          e.status?.toLowerCase() === "upcoming" ||
+          (e.startDatetime != null && new Date(e.startDatetime).getTime() > nowMs);
+        return (
         <Link
           key={e.id}
           href={`/events/${e.id}`}
@@ -68,10 +75,23 @@ export function EventList({ events }: { events: EventLike[] }) {
               {e.capacity ? <span className="text-muted">/{e.capacity}</span> : ""}
               <span className="text-muted"> players</span>
             </div>
-            <div className="text-xs text-muted">{fmtDate(e.startDatetime)} · {cost(e.costCents, e.currency)}</div>
+            <div className="text-xs text-muted">
+              {upcoming && e.startDatetime ? (
+                <LocalTime
+                  ms={new Date(e.startDatetime).getTime()}
+                  fallback={fmtDateTime(e.startDatetime)}
+                  withTime
+                />
+              ) : (
+                fmtDate(e.startDatetime)
+              )}
+              {" · "}
+              {cost(e.costCents, e.currency)}
+            </div>
           </div>
         </Link>
-      ))}
+        );
+      })}
     </Card>
   );
 }

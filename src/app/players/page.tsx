@@ -1,5 +1,5 @@
 import { getPlayersByAttendance, hasEloData } from "@/lib/queries";
-import { Card, PageTitle, PlayerLink } from "@/components/ui";
+import { Card, PageTitle, PlayerLink, ProvisionalMark } from "@/components/ui";
 import { RegionTabs } from "@/components/region-tabs";
 import { pct, winRate } from "@/lib/format";
 import { isRegion, REGION_LABELS } from "@/lib/regions";
@@ -55,7 +55,10 @@ export default async function PlayersPage({
                   </td>
                   <td className="text-right py-2 px-3 tabular-nums">{p._count.entries}</td>
                   {elo && (
-                    <td className="text-right py-2 px-3 tabular-nums font-semibold text-accent">{p.rating}</td>
+                    <td className="text-right py-2 px-3 tabular-nums font-semibold text-accent">
+                      {p.rating}
+                      <ProvisionalMark rd={p.ratingDeviation} />
+                    </td>
                   )}
                   {elo && (
                     <td className="text-right py-2 px-3 tabular-nums">{p.wins}-{p.losses}-{p.draws}</td>

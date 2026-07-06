@@ -3,12 +3,24 @@
 
 generator client {
   provider = "prisma-client-js"
-  output   = "../src/generated/prisma"
+  // Default output (node_modules/@prisma/client). We deliberately do NOT use a
+  // custom `output` into src/: a local client gets inlined by `next build` with
+  // the Node export condition, so on Cloudflare Workers it wrongly tries to read
+  // the wasm from disk. As a real package listed in `serverExternalPackages`,
+  // Next leaves it external and OpenNext resolves the `workerd` condition (wasm
+  // imported as a module). See src/lib/prisma.ts.
+  //
+  // engineType = "client": GA "query compiler" — a WASM compiler and NO native
+  // Rust engine, so there's no per-platform binaryTarget to mismatch. Requires a
+  // driver adapter (we always pass the Neon adapter).
+  engineType = "client"
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Migrations / introspection use the direct (non-pooler) connection.
+  directUrl = env("DIRECT_DATABASE_URL")
 }
 
 /// A competitive player, keyed by their carde.io user id.
@@ -21,10 +33,12 @@ model Player {
   country     String?
   region      String?  // home region: "tri-cities" | "flint" | "other"
 
-  // Current rating snapshot (recomputed from matches).
-  rating      Int      @default(1000)
-  peakRating  Int      @default(1000)
-  gamesPlayed Int      @default(0)
+  // Current rating snapshot (recomputed from matches), Glicko-2.
+  rating          Int   @default(1500)
+  peakRating      Int   @default(1500)
+  ratingDeviation Float @default(350) // Glicko RD: uncertainty (high => provisional)
+  volatility      Float @default(0.06) // Glicko-2 volatility
+  gamesPlayed     Int   @default(0)
   wins        Int      @default(0)
   losses      Int      @default(0)
   draws       Int      @default(0)

@@ -18,6 +18,7 @@ import {
   browseDecks,
   ensureAuth,
   extractLegend,
+  getAllRegistrations,
   getEvent,
   getRounds,
   hasToken,
@@ -222,6 +223,33 @@ function parseRounds(payload: unknown): ParsedMatch[] {
   return out;
 }
 
+/**
+ * Real names for an event's players, keyed by carde user id. The registrations
+ * endpoint exposes first_name/last_name only when we're authorized for the event
+ * (e.g. crawling a live RQ we have access to); otherwise it's gated or carries
+ * just best_identifier. Best-effort — never throws, so ingest still succeeds with
+ * initial-only names when full names aren't available.
+ */
+async function fetchRegistrationNames(
+  eventId: number,
+): Promise<Map<string, { first?: string; last?: string }>> {
+  const names = new Map<string, { first?: string; last?: string }>();
+  try {
+    const regs = await getAllRegistrations(eventId);
+    for (const r of regs) {
+      const u = r.user ?? undefined;
+      const id = u?.id ?? (r as { user_id?: number }).user_id;
+      if (id == null) continue;
+      const first = (u?.first_name ?? "").trim() || undefined;
+      const last = (u?.last_name ?? "").trim() || undefined;
+      if (first || last) names.set(String(id), { first, last });
+    }
+  } catch {
+    /* registrations often gated/empty — callers fall back to match names */
+  }
+  return names;
+}
+
 async function ingestResults(eventId: number) {
   const payload = await getRounds(eventId);
   const matches = parseRounds(payload);
@@ -235,11 +263,37 @@ async function ingestResults(eventId: number) {
     seen.set(m.p1.id, m.p1.name);
     if (m.p2) seen.set(m.p2.id, m.p2.name);
   }
-  for (const [id, name] of seen) {
+
+  // Prefer full names from registrations when available; fall back to the
+  // initial-only match names (best_identifier). Guard against downgrading a
+  // previously-captured full name on a later run that can't see registrations.
+  const regNames = await fetchRegistrationNames(eventId);
+  const existing = await prisma.player.findMany({
+    where: { id: { in: [...seen.keys()] } },
+    select: { id: true, lastName: true },
+  });
+  const hasFullName = new Set(existing.filter((e) => e.lastName).map((e) => e.id));
+
+  let fullNamed = 0;
+  for (const [id, matchName] of seen) {
+    const reg = regNames.get(id);
+    const full = reg?.first && reg?.last ? `${reg.first} ${reg.last}` : null;
+    if (full) fullNamed++;
+
+    // What to write on an EXISTING row: upgrade to a full name when we have one,
+    // otherwise refresh the initials only if there's no full name to protect.
+    const update = full
+      ? { displayName: full, firstName: reg!.first, lastName: reg!.last }
+      : hasFullName.has(id)
+        ? {}
+        : { displayName: matchName };
+
     await prisma.player.upsert({
       where: { id },
-      create: { id, displayName: name },
-      update: { displayName: name },
+      create: full
+        ? { id, displayName: full, firstName: reg!.first, lastName: reg!.last }
+        : { id, displayName: matchName },
+      update,
     });
     await prisma.eventEntry.upsert({
       where: { eventId_playerId: { eventId: String(eventId), playerId: id } },
@@ -272,7 +326,8 @@ async function ingestResults(eventId: number) {
     where: { id: String(eventId) },
     data: { resultsComplete: true },
   });
-  console.log(`  event ${eventId}: ${matches.length} matches, ${seen.size} players`);
+  const nameNote = fullNamed > 0 ? `, ${fullNamed} full names` : " (initials only)";
+  console.log(`  event ${eventId}: ${matches.length} matches, ${seen.size} players${nameNote}`);
 }
 
 async function ingestEvent(eventId: number, raw: boolean) {

@@ -13,9 +13,20 @@
 # testing
 /coverage
 
+# daily-update.ps1 maintenance logs
+/logs
+
+# scratch / ad-hoc timing logs
+.scratch_*.log
+
 # next.js
 /.next/
 /out/
+
+# cloudflare / opennext build output
+/.open-next/
+/.wrangler/
+.dev.vars
 
 # production
 /build
@@ -50,3 +61,6 @@ next-env.d.ts
 
 # generated Prisma client (regenerated via postinstall)
 src/generated
+
+# SQLite->Postgres migration dump (large, regenerable)
+prisma/dump.json

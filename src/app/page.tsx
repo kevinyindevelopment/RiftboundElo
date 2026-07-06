@@ -33,7 +33,7 @@ export default async function HomePage() {
         </h1>
         <p className="text-muted mt-1">
           Your personal Riftbound tracker — local events, stores, players, and an
-          Elo ladder, split across the Tri Cities, Flint, and beyond.
+          Elo ladder, split across MBS, Flint, and beyond.
         </p>
       </section>
 

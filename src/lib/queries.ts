@@ -1,5 +1,16 @@
 import { prisma } from "@/lib/prisma";
 import { isRegion } from "@/lib/regions";
+import {
+  calendarForCountry,
+  setForDate,
+  SET_DEFS,
+  SET_ORDER,
+  type ReleaseCalendar,
+  type SetCode,
+} from "@/lib/sets";
+
+/** Minimum games to appear on the ranked ladder (a real sample, not a fluke). */
+export const MIN_RANKED_GAMES = Number(process.env.MIN_RANKED_GAMES ?? 10);
 
 /** Narrow a query by region, or {} for "all". */
 function playerRegion(region?: string) {
@@ -9,10 +20,14 @@ function eventRegion(region?: string) {
   return isRegion(region) ? { store: { region } } : {};
 }
 
-/** Top players by Elo, optionally filtered to one region. */
+/**
+ * The ranked ladder: players with at least MIN_RANKED_GAMES games. `rating` is
+ * already the sample-size–regressed value (see recompute-elo / glicko), so a
+ * straight sort by it ranks proven players above small lucky/unlucky samples.
+ */
 export async function getLeaderboard(limit = 100, region?: string, offset = 0) {
   return prisma.player.findMany({
-    where: { gamesPlayed: { gt: 0 }, ...playerRegion(region) },
+    where: { gamesPlayed: { gte: MIN_RANKED_GAMES }, ...playerRegion(region) },
     orderBy: [{ rating: "desc" }, { gamesPlayed: "desc" }],
     take: limit,
     skip: offset,
@@ -22,7 +37,7 @@ export async function getLeaderboard(limit = 100, region?: string, offset = 0) {
 export async function getGlobalStats() {
   const [players, rankedPlayers, events, matches, decks, stores] = await Promise.all([
     prisma.player.count(),
-    prisma.player.count({ where: { gamesPlayed: { gt: 0 } } }),
+    prisma.player.count({ where: { gamesPlayed: { gte: MIN_RANKED_GAMES } } }),
     prisma.event.count(),
     prisma.match.count(),
     prisma.deck.count(),
@@ -49,6 +64,125 @@ export async function getRecentEvents(limit = 12, region?: string) {
     take: limit,
     include: { store: true, _count: { select: { entries: true } } },
   });
+}
+
+export const SEARCH_PAGE_SIZE = 25;
+
+/**
+ * Free-text search across players and stores (case-insensitive substring).
+ * Returns ALL matches, paginated independently per section. `playerPage` and
+ * `storePage` are 1-based; out-of-range pages clamp to the last page.
+ */
+export async function searchAll(
+  query: string,
+  { playerPage = 1, storePage = 1, eventPage = 1, pageSize = SEARCH_PAGE_SIZE } = {},
+) {
+  const term = query.trim();
+  if (!term) {
+    return {
+      term,
+      players: [],
+      stores: [],
+      events: [],
+      playersTotal: 0,
+      storesTotal: 0,
+      eventsTotal: 0,
+      playerPage: 1,
+      storePage: 1,
+      eventPage: 1,
+      playerPages: 0,
+      storePages: 0,
+      eventPages: 0,
+      pageSize,
+    };
+  }
+
+  const playerWhere = {
+    OR: [
+      { handle: { contains: term, mode: "insensitive" as const } },
+      { displayName: { contains: term, mode: "insensitive" as const } },
+      { firstName: { contains: term, mode: "insensitive" as const } },
+      { lastName: { contains: term, mode: "insensitive" as const } },
+    ],
+  };
+  const storeWhere = {
+    OR: [
+      { name: { contains: term, mode: "insensitive" as const } },
+      { city: { contains: term, mode: "insensitive" as const } },
+      { state: { contains: term, mode: "insensitive" as const } },
+    ],
+  };
+  // Match events by their own name or by their host store's name/city.
+  const eventWhere = {
+    OR: [
+      { name: { contains: term, mode: "insensitive" as const } },
+      { store: { name: { contains: term, mode: "insensitive" as const } } },
+      { store: { city: { contains: term, mode: "insensitive" as const } } },
+    ],
+  };
+
+  const [playersTotal, storesTotal, eventsTotal] = await Promise.all([
+    prisma.player.count({ where: playerWhere }),
+    prisma.store.count({ where: storeWhere }),
+    prisma.event.count({ where: eventWhere }),
+  ]);
+
+  const playerPages = Math.max(1, Math.ceil(playersTotal / pageSize));
+  const storePages = Math.max(1, Math.ceil(storesTotal / pageSize));
+  const eventPages = Math.max(1, Math.ceil(eventsTotal / pageSize));
+  const pPage = Math.min(Math.max(1, playerPage), playerPages);
+  const sPage = Math.min(Math.max(1, storePage), storePages);
+  const ePage = Math.min(Math.max(1, eventPage), eventPages);
+
+  const [players, stores, events] = await Promise.all([
+    playersTotal === 0
+      ? []
+      : prisma.player.findMany({
+          where: playerWhere,
+          orderBy: [{ rating: "desc" }, { gamesPlayed: "desc" }],
+          skip: (pPage - 1) * pageSize,
+          take: pageSize,
+          include: { _count: { select: { entries: true } } },
+        }),
+    storesTotal === 0
+      ? []
+      : prisma.store.findMany({
+          where: storeWhere,
+          orderBy: { name: "asc" },
+          skip: (sPage - 1) * pageSize,
+          take: pageSize,
+          include: { _count: { select: { events: true } } },
+        }),
+    eventsTotal === 0
+      ? []
+      : prisma.event.findMany({
+          where: eventWhere,
+          orderBy: { startDatetime: "desc" },
+          skip: (ePage - 1) * pageSize,
+          take: pageSize,
+          include: {
+            store: { select: { name: true, city: true, state: true } },
+            _count: { select: { entries: true } },
+          },
+        }),
+  ]);
+
+  return {
+    term,
+    players,
+    stores,
+    events,
+    playersTotal,
+    storesTotal,
+    eventsTotal,
+    playerPage: pPage,
+    storePage: sPage,
+    eventPage: ePage,
+    playerPages: playersTotal === 0 ? 0 : playerPages,
+    storePages: storesTotal === 0 ? 0 : storePages,
+    eventPages: eventsTotal === 0 ? 0 : eventPages,
+    pageSize,
+  };
 }
 
 export async function getStores() {
@@ -94,7 +228,9 @@ export async function getRegionSummary() {
       region,
       stores: await prisma.store.count({ where: { region } }),
       events: await prisma.event.count({ where: { store: { region } } }),
-      rankedPlayers: await prisma.player.count({ where: { region, gamesPlayed: { gt: 0 } } }),
+      rankedPlayers: await prisma.player.count({
+        where: { region, gamesPlayed: { gte: MIN_RANKED_GAMES } },
+      }),
     })),
   );
 }
@@ -104,47 +240,173 @@ export async function getPlayer(id: string) {
 }
 
 export async function getPlayerRatingHistory(id: string) {
-  return prisma.ratingChange.findMany({
+  const rows = await prisma.ratingChange.findMany({
     where: { playerId: id },
-    orderBy: { createdAt: "asc" },
-    include: {
+    select: {
+      ratingBefore: true,
+      ratingAfter: true,
+      delta: true,
       match: {
         select: {
           id: true,
           roundNumber: true,
           playedAt: true,
-          event: { select: { id: true, name: true } },
+          event: {
+            select: {
+              id: true,
+              name: true,
+              startDatetime: true,
+              store: { select: { country: true } },
+            },
+          },
         },
       },
     },
   });
+  // `createdAt` is written in bulk at recompute time and is NOT chronological,
+  // so sort by the match's real play date (mirrors recompute's chronoKey order).
+  const key = (r: (typeof rows)[number]) => {
+    const t =
+      r.match.playedAt?.getTime() ??
+      r.match.event?.startDatetime?.getTime() ??
+      Number.MAX_SAFE_INTEGER;
+    return `${String(t).padStart(16, "0")}-${String(r.match.roundNumber ?? 0).padStart(4, "0")}-${r.match.id}`;
+  };
+  return rows.sort((a, b) => key(a).localeCompare(key(b)));
 }
 
-export async function getPlayerRank(rating: number): Promise<number> {
+/**
+ * Global rank among ranked players (>= MIN_RANKED_GAMES) by conservative rating.
+ * Returns null below the games floor so the UI can show "Unranked".
+ */
+export async function getPlayerRank(player: {
+  rating: number;
+  gamesPlayed: number;
+}): Promise<number | null> {
+  if (player.gamesPlayed < MIN_RANKED_GAMES) return null;
   const higher = await prisma.player.count({
-    where: { gamesPlayed: { gt: 0 }, rating: { gt: rating } },
+    where: { gamesPlayed: { gte: MIN_RANKED_GAMES }, rating: { gt: player.rating } },
   });
   return higher + 1;
 }
 
-/** A player's deck usage across events, with per-deck record. */
-export async function getPlayerDecks(playerId: string) {
-  const entries = await prisma.eventEntry.findMany({
-    where: { playerId, deckId: { not: null } },
-    include: { deck: true },
-  });
-  const byDeck = new Map<string, { name: string; legend: string | null; count: number }>();
+export type PlayerLegendStat = {
+  legend: string;
+  domains: string | null;
+  events: number; // times registered with this Legend
+  bestStanding: number | null; // best (lowest) final placing
+  wins: number;
+  losses: number;
+  draws: number;
+  netDelta: number; // net Elo change across decklisted matches
+};
+
+/**
+ * A player's Legend history: which Legends they've piloted, how often, and —
+ * for events that published decklists — their actual match record and net Elo
+ * swing with each. Event/best-finish counts come from registrations; the record
+ * comes from matches whose deck id is known, so it covers only decklisted events
+ * (`decklistedGames` < total games for most players). Returns [] if none.
+ */
+export async function getPlayerLegendStats(
+  playerId: string,
+  set?: SetCode,
+): Promise<PlayerLegendStat[]> {
+  const eventSel = {
+    startDatetime: true,
+    store: { select: { country: true } },
+  } as const;
+  const [entries, matches] = await Promise.all([
+    prisma.eventEntry.findMany({
+      where: { playerId, deckId: { not: null } },
+      select: {
+        deckId: true,
+        finalStanding: true,
+        deck: { select: { legend: true, name: true, domains: true } },
+        event: { select: eventSel },
+      },
+    }),
+    prisma.match.findMany({
+      where: { OR: [{ playerOneId: playerId }, { playerTwoId: playerId }], isBye: false },
+      select: {
+        deckOneId: true,
+        deckTwoId: true,
+        playerOneId: true,
+        playedAt: true,
+        winnerId: true,
+        changes: { where: { playerId }, select: { delta: true } },
+        event: { select: eventSel },
+      },
+    }),
+  ]);
+
+  // Set-era bucketing (locale-aware) for an event-attached row.
+  const setOf = (
+    ev: { startDatetime: Date | null; store?: { country?: string | null } | null } | null,
+    playedAt?: Date | null,
+  ): SetCode | null =>
+    setForDate(playedAt ?? ev?.startDatetime ?? null, calendarForCountry(ev?.store?.country));
+
+  // deckId -> Legend + domains. Seed from registrations, then backfill any deck
+  // id that only appears on a match (recorded mid-event without a registration).
+  const deckInfo = new Map<string, { legend: string; domains: string | null }>();
   for (const e of entries) {
-    if (!e.deck) continue;
-    const cur = byDeck.get(e.deck.id) ?? {
-      name: e.deck.name,
-      legend: e.deck.legend,
-      count: 0,
-    };
-    cur.count += 1;
-    byDeck.set(e.deck.id, cur);
+    if (e.deckId && e.deck) deckInfo.set(e.deckId, { legend: e.deck.legend ?? e.deck.name, domains: e.deck.domains });
   }
-  return [...byDeck.values()].sort((a, b) => b.count - a.count);
+  const myDeckId = (m: (typeof matches)[number]) =>
+    m.playerOneId === playerId ? m.deckOneId : m.deckTwoId;
+  const missing = [
+    ...new Set(matches.map(myDeckId).filter((d): d is string => !!d && !deckInfo.has(d))),
+  ];
+  if (missing.length) {
+    const decks = await prisma.deck.findMany({
+      where: { id: { in: missing } },
+      select: { id: true, legend: true, name: true, domains: true },
+    });
+    for (const d of decks) deckInfo.set(d.id, { legend: d.legend ?? d.name, domains: d.domains });
+  }
+
+  const byLegend = new Map<string, PlayerLegendStat>();
+  const get = (legend: string, domains: string | null) => {
+    let a = byLegend.get(legend);
+    if (!a) {
+      a = { legend, domains, events: 0, bestStanding: null, wins: 0, losses: 0, draws: 0, netDelta: 0 };
+      byLegend.set(legend, a);
+    }
+    if (a.domains == null && domains != null) a.domains = domains;
+    return a;
+  };
+
+  for (const e of entries) {
+    if (set && setOf(e.event) !== set) continue;
+    const info = e.deckId ? deckInfo.get(e.deckId) : undefined;
+    const legend = info?.legend ?? e.deck?.legend ?? e.deck?.name;
+    if (!legend) continue;
+    const a = get(legend, info?.domains ?? e.deck?.domains ?? null);
+    a.events++;
+    if (e.finalStanding != null) {
+      a.bestStanding = a.bestStanding == null ? e.finalStanding : Math.min(a.bestStanding, e.finalStanding);
+    }
+  }
+
+  for (const m of matches) {
+    if (set && setOf(m.event, m.playedAt) !== set) continue;
+    const did = myDeckId(m);
+    const info = did ? deckInfo.get(did) : undefined;
+    if (!info) continue; // unknown deck for this match — can't attribute
+    const a = get(info.legend, info.domains);
+    if (m.winnerId == null) a.draws++;
+    else if (m.winnerId === playerId) a.wins++;
+    else a.losses++;
+    a.netDelta += m.changes[0]?.delta ?? 0;
+  }
+
+  return [...byLegend.values()].sort(
+    (a, b) =>
+      b.events - a.events ||
+      b.wins + b.losses + b.draws - (a.wins + a.losses + a.draws) ||
+      a.legend.localeCompare(b.legend),
+  );
 }
 
 export async function getPlayerEvents(playerId: string) {
@@ -191,6 +453,72 @@ export async function getPlayerRecentMatches(playerId: string, limit = 20) {
   });
 }
 
+export const MATCH_PAGE_SIZE = 25;
+
+/** Legend name out of a synthesized deck id ("legend:Norra" -> "Norra"). */
+function legendOf(deckId: string | null): string | null {
+  if (!deckId) return null;
+  return deckId.startsWith("legend:") ? deckId.slice("legend:".length) : null;
+}
+
+/**
+ * Full, paginated match history for a player — newest first. Each row carries
+ * event + store location and the Legend each side piloted (when known) so the
+ * UI can show event / location / decklist markers.
+ */
+export async function getPlayerMatchHistory(
+  playerId: string,
+  { page = 1, pageSize = MATCH_PAGE_SIZE } = {},
+) {
+  const where = {
+    OR: [{ playerOneId: playerId }, { playerTwoId: playerId }],
+    isBye: false,
+  };
+  const total = await prisma.match.count({ where });
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const p = Math.min(Math.max(1, page), pages);
+  const matches = await prisma.match.findMany({
+    where,
+    orderBy: [{ playedAt: "desc" }, { id: "desc" }],
+    skip: (p - 1) * pageSize,
+    take: pageSize,
+    include: {
+      playerOne: { select: { id: true, displayName: true, handle: true } },
+      playerTwo: { select: { id: true, displayName: true, handle: true } },
+      event: {
+        select: {
+          id: true,
+          name: true,
+          startDatetime: true,
+          store: { select: { name: true, city: true, state: true } },
+        },
+      },
+      changes: { where: { playerId }, select: { delta: true } },
+    },
+  });
+  const rows = matches.map((m) => {
+    const isP1 = m.playerOneId === playerId;
+    const opp = isP1 ? m.playerTwo : m.playerOne;
+    const result =
+      m.winnerId == null ? "draw" : m.winnerId === playerId ? "win" : "loss";
+    return {
+      id: m.id,
+      event: m.event,
+      roundNumber: m.roundNumber,
+      opponent: opp,
+      result: result as "win" | "loss" | "draw",
+      score: isP1
+        ? `${m.playerOneWins}-${m.playerTwoWins}`
+        : `${m.playerTwoWins}-${m.playerOneWins}`,
+      delta: m.changes[0]?.delta ?? 0,
+      playedAt: m.playedAt,
+      myLegend: legendOf(isP1 ? m.deckOneId : m.deckTwoId),
+      oppLegend: legendOf(isP1 ? m.deckTwoId : m.deckOneId),
+    };
+  });
+  return { matches: rows, total, page: p, pages, pageSize };
+}
+
 export async function getEvents(limit = 100) {
   return prisma.event.findMany({
     orderBy: { startDatetime: "desc" },
@@ -219,62 +547,246 @@ export async function getEvent(id: string) {
   });
 }
 
-/** Metagame: aggregate by Legend across all event entries, with win rates. */
-export async function getMetagame() {
-  // Pull every entry's deck legend, then compute record from that player's
-  // matches in that event where the deck was used.
-  const decks = await prisma.deck.findMany();
-  const legendOf = new Map<string, string>();
-  for (const d of decks) legendOf.set(d.id, d.legend ?? d.name);
+/** Lightweight event header: metadata + store + counts (no row payloads). */
+export async function getEventSummary(id: string) {
+  const [event, standingsCount] = await Promise.all([
+    prisma.event.findUnique({
+      where: { id },
+      include: { store: true, _count: { select: { entries: true, matches: true } } },
+    }),
+    prisma.eventEntry.count({ where: { eventId: id, finalStanding: { not: null } } }),
+  ]);
+  if (!event) return null;
+  return { ...event, hasStandings: standingsCount > 0 };
+}
 
-  const matches = await prisma.match.findMany({
-    where: { isBye: false },
-    select: {
-      deckOneId: true,
-      deckTwoId: true,
-      winnerId: true,
-      playerOneId: true,
-      playerTwoId: true,
+export const EVENT_STANDINGS_PAGE = 100;
+export const EVENT_ROUNDS_PAGE = 150;
+
+/** Paginated standings/roster for an event (heavy on 1000+ player events).
+ *  `legend` filters to entries whose deck piloted that Legend. */
+export async function getEventStandings(
+  id: string,
+  { page = 1, pageSize = EVENT_STANDINGS_PAGE, legend }: { page?: number; pageSize?: number; legend?: string } = {},
+) {
+  const where = {
+    eventId: id,
+    ...(legend
+      ? { deck: { OR: [{ legend }, { legend: null, name: legend }] } }
+      : {}),
+  };
+  const total = await prisma.eventEntry.count({ where });
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const p = Math.min(Math.max(1, page), pages);
+  const entries = await prisma.eventEntry.findMany({
+    where,
+    orderBy: [{ finalStanding: "asc" }],
+    skip: (p - 1) * pageSize,
+    take: pageSize,
+    include: {
+      player: { select: { id: true, displayName: true, handle: true } },
+      deck: { select: { legend: true, name: true, domains: true } },
     },
   });
+  return { entries, total, page: p, pages, pageSize, offset: (p - 1) * pageSize };
+}
+
+/** Paginated pairings for an event; Legend per side derived from deck ids. */
+export async function getEventRounds(
+  id: string,
+  { page = 1, pageSize = EVENT_ROUNDS_PAGE } = {},
+) {
+  const where = { eventId: id };
+  const total = await prisma.match.count({ where });
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const p = Math.min(Math.max(1, page), pages);
+  const matches = await prisma.match.findMany({
+    where,
+    orderBy: [{ roundNumber: "asc" }, { id: "asc" }],
+    skip: (p - 1) * pageSize,
+    take: pageSize,
+    include: {
+      playerOne: { select: { id: true, displayName: true, handle: true } },
+      playerTwo: { select: { id: true, displayName: true, handle: true } },
+    },
+  });
+  const rows = matches.map((m) => ({
+    ...m,
+    oneLegend: legendOf(m.deckOneId),
+    twoLegend: legendOf(m.deckTwoId),
+  }));
+  return { matches: rows, total, page: p, pages, pageSize };
+}
+
+export type EventDeckStat = {
+  legend: string;
+  domains: string | null;
+  players: number; // entries that ran this Legend
+  wins: number;
+  losses: number;
+  draws: number;
+  bestStanding: number | null; // best (lowest) final placing among its pilots
+};
+
+/**
+ * Per-event deck breakdown: for events that published decklists, every match
+ * carries both players' deck ids, so we can compute each Legend's real match
+ * record at THIS event (not just who registered it). Returns [] when the event
+ * has no deck data.
+ */
+export async function getEventMetagame(eventId: string): Promise<{
+  stats: EventDeckStat[];
+  totalPlayers: number;
+}> {
+  // Aggregate in SQL (scoped to this event) so a big RQ doesn't stream ~7k
+  // match rows into memory. Legend + domains come from the deck; play counts +
+  // best finish from entries; win/loss/draw from per-match deck ids.
+  const leg = "COALESCE(d.legend, d.name)";
+  const matchSql = `
+    WITH sides AS (
+      SELECT ${leg} AS legend, d.domains AS domains,
+        CASE WHEN m."winnerId" IS NULL THEN 0 WHEN m."winnerId" = m."playerOneId" THEN 1 ELSE -1 END AS r
+      FROM "Match" m JOIN "Deck" d ON d.id = m."deckOneId"
+      WHERE m."eventId" = $1 AND m."isBye" = false AND m."deckOneId" IS NOT NULL
+      UNION ALL
+      SELECT ${leg}, d.domains,
+        CASE WHEN m."winnerId" IS NULL THEN 0 WHEN m."winnerId" = m."playerTwoId" THEN 1 ELSE -1 END
+      FROM "Match" m JOIN "Deck" d ON d.id = m."deckTwoId"
+      WHERE m."eventId" = $1 AND m."isBye" = false AND m."deckTwoId" IS NOT NULL
+    )
+    SELECT legend, MAX(domains) AS domains,
+      SUM(CASE WHEN r = 1 THEN 1 ELSE 0 END)::int AS wins,
+      SUM(CASE WHEN r = -1 THEN 1 ELSE 0 END)::int AS losses,
+      SUM(CASE WHEN r = 0 THEN 1 ELSE 0 END)::int AS draws
+    FROM sides WHERE legend IS NOT NULL GROUP BY legend`;
+  const entrySql = `
+    SELECT ${leg} AS legend, MAX(d.domains) AS domains,
+      COUNT(*)::int AS players, MIN(ee."finalStanding")::int AS "bestStanding"
+    FROM "EventEntry" ee JOIN "Deck" d ON d.id = ee."deckId"
+    WHERE ee."eventId" = $1 AND ee."deckId" IS NOT NULL
+    GROUP BY ${leg}`;
+  const [matchRows, entryRows] = await Promise.all([
+    prisma.$queryRawUnsafe<{ legend: string; domains: string | null; wins: number; losses: number; draws: number }[]>(matchSql, eventId),
+    prisma.$queryRawUnsafe<{ legend: string; domains: string | null; players: number; bestStanding: number | null }[]>(entrySql, eventId),
+  ]);
+
+  const byLegend = new Map<string, EventDeckStat>();
+  const get = (legend: string, domains: string | null) => {
+    let a = byLegend.get(legend);
+    if (!a) {
+      a = { legend, domains, players: 0, wins: 0, losses: 0, draws: 0, bestStanding: null };
+      byLegend.set(legend, a);
+    }
+    if (a.domains == null && domains != null) a.domains = domains;
+    return a;
+  };
+  for (const e of entryRows) {
+    const a = get(e.legend, e.domains);
+    a.players = e.players;
+    a.bestStanding = e.bestStanding;
+  }
+  for (const m of matchRows) {
+    const a = get(m.legend, m.domains);
+    a.wins = m.wins;
+    a.losses = m.losses;
+    a.draws = m.draws;
+  }
+
+  const wr = (a: EventDeckStat) => {
+    const g = a.wins + a.losses + a.draws;
+    return g ? (a.wins + 0.5 * a.draws) / g : 0;
+  };
+  const stats = [...byLegend.values()].sort(
+    (a, b) => b.players - a.players || wr(b) - wr(a) || a.legend.localeCompare(b.legend),
+  );
+  const totalPlayers = stats.reduce((s, a) => s + a.players, 0);
+  return { stats, totalPlayers };
+}
+
+/**
+ * Metagame: aggregate by Legend across event entries, with win rates. When
+ * `set` is given, restricts to matches/entries whose event was played during
+ * that set release (locale-aware: China events use the China calendar). Each
+ * match is bucketed by its own play date, falling back to the event date.
+ */
+/**
+ * SQL expression that classifies a date column into a SetCode, locale-aware
+ * (CN uses the China calendar). Built from SET_DEFS so it stays in sync. Dates
+ * before the first release fold into the earliest set (the JS "floor bucket").
+ */
+function setCaseSql(dateExpr: string, countryExpr: string): string {
+  const branch = (cal: ReleaseCalendar) => {
+    // Newest-first so the first satisfied threshold wins.
+    const whens = [...SET_ORDER]
+      .slice(1) // drop the earliest — it's the ELSE/floor
+      .reverse()
+      .map((c) => `WHEN ${dateExpr} >= '${SET_DEFS[c].release[cal]}' THEN '${c}'`)
+      .join(" ");
+    return `CASE ${whens} ELSE '${SET_ORDER[0]}' END`;
+  };
+  return `CASE WHEN UPPER(COALESCE(${countryExpr},'')) = 'CN' THEN ${branch("china")} ELSE ${branch("global")} END`;
+}
+
+/**
+ * Metagame win/play rates aggregated by Legend. Done entirely in SQL (GROUP BY)
+ * — returns ~one row per Legend instead of streaming every match into memory.
+ * Optional `set` restricts to games played while that set was live.
+ */
+export async function getMetagame(set?: SetCode) {
+  const legend = "COALESCE(d.legend, d.name)";
+  // Per-side result rows (one match contributes two sides). Legend from the
+  // side's deck; win/loss/draw from the winner. Set classification from the
+  // match's play date (fallback event date) and the store's locale.
+  const matchDate = `COALESCE(m."playedAt", e."startDatetime")`;
+  const side = (deckCol: string, playerCol: string) => `
+    SELECT ${legend} AS legend,
+      CASE WHEN m."winnerId" IS NULL THEN 0 WHEN m."winnerId" = m."${playerCol}" THEN 1 ELSE -1 END AS r
+      ${set ? `, ${setCaseSql(matchDate, "s.country")} AS setcode, (${matchDate} IS NOT NULL) AS dated` : ""}
+    FROM "Match" m
+    JOIN "Deck" d ON d.id = m."${deckCol}"
+    JOIN "Event" e ON e.id = m."eventId"
+    LEFT JOIN "Store" s ON s.id = e."storeId"
+    WHERE m."isBye" = false AND m."${deckCol}" IS NOT NULL`;
+
+  const matchFilter = set ? `WHERE setcode = $1 AND dated` : "";
+  const matchSql = `
+    WITH sides AS (
+      ${side("deckOneId", "playerOneId")}
+      UNION ALL
+      ${side("deckTwoId", "playerTwoId")}
+    )
+    SELECT legend,
+      SUM(CASE WHEN r = 1 THEN 1 ELSE 0 END)::int AS wins,
+      SUM(CASE WHEN r = -1 THEN 1 ELSE 0 END)::int AS losses,
+      SUM(CASE WHEN r = 0 THEN 1 ELSE 0 END)::int AS draws
+    FROM sides
+    WHERE legend IS NOT NULL ${set ? "AND setcode = $1 AND dated" : ""}
+    GROUP BY legend`;
+
+  const entrySql = `
+    SELECT ${legend} AS legend, COUNT(*)::int AS entries
+    FROM "EventEntry" ee
+    JOIN "Deck" d ON d.id = ee."deckId"
+    JOIN "Event" e ON e.id = ee."eventId"
+    LEFT JOIN "Store" s ON s.id = e."storeId"
+    WHERE ee."deckId" IS NOT NULL
+      ${set ? `AND e."startDatetime" IS NOT NULL AND ${setCaseSql('e."startDatetime"', "s.country")} = $1` : ""}
+    GROUP BY ${legend}`;
+
+  const args = set ? [set] : [];
+  const [rows, entryRows] = await Promise.all([
+    prisma.$queryRawUnsafe<{ legend: string; wins: number; losses: number; draws: number }[]>(matchSql, ...args),
+    prisma.$queryRawUnsafe<{ legend: string; entries: number }[]>(entrySql, ...args),
+  ]);
 
   type Agg = { legend: string; entries: number; wins: number; losses: number; draws: number };
   const byLegend = new Map<string, Agg>();
-  const get = (legend: string) => {
-    let a = byLegend.get(legend);
-    if (!a) {
-      a = { legend, entries: 0, wins: 0, losses: 0, draws: 0 };
-      byLegend.set(legend, a);
-    }
-    return a;
-  };
-
-  for (const m of matches) {
-    const l1 = m.deckOneId ? legendOf.get(m.deckOneId) : undefined;
-    const l2 = m.deckTwoId ? legendOf.get(m.deckTwoId) : undefined;
-    if (l1) {
-      const a = get(l1);
-      if (m.winnerId == null) a.draws++;
-      else if (m.winnerId === m.playerOneId) a.wins++;
-      else a.losses++;
-    }
-    if (l2) {
-      const a = get(l2);
-      if (m.winnerId == null) a.draws++;
-      else if (m.winnerId === m.playerTwoId) a.wins++;
-      else a.losses++;
-    }
+  for (const r of rows) {
+    byLegend.set(r.legend, { legend: r.legend, wins: r.wins, losses: r.losses, draws: r.draws, entries: 0 });
   }
-
-  // entries = distinct event participations per legend
-  const entries = await prisma.eventEntry.findMany({
-    where: { deckId: { not: null } },
-    select: { deckId: true },
-  });
-  for (const e of entries) {
-    if (!e.deckId) continue;
-    const legend = legendOf.get(e.deckId);
-    if (legend) get(legend).entries++;
+  for (const e of entryRows) {
+    const a = byLegend.get(e.legend);
+    if (a) a.entries = e.entries;
   }
 
   return [...byLegend.values()]

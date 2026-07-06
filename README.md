@@ -56,8 +56,12 @@ CARDE_TOKEN=""              # paste an API token, OR
 CARDE_EMAIL=""              # log in with your own carde.io account
 CARDE_PASSWORD=""
 
-ELO_START="1000"            # starting rating
-ELO_K="32"                  # K-factor (rating volatility)
+ELO_START="1000"            # rating scale center / seed for new players
+GLICKO_RD_START="350"       # initial rating deviation (uncertainty) for new players
+GLICKO_VOL="0.06"           # initial Glicko-2 volatility
+GLICKO_TAU="0.5"            # system constant: how much volatility can change
+GLICKO_RD_MIN="30"          # RD floor (stops ratings freezing solid)
+GLICKO_RD_ESTABLISHED="110" # at/below this RD a rating is no longer "provisional"
 ```
 
 ## What's actually reachable
@@ -106,15 +110,24 @@ Set `CARDE_TOKEN` in `.env` first (copy `.env.example`; grab the token from a
 `hydraproxy` request's `Authorization: Token …` header while signed in to
 play.carde.io). No token is needed just to view the committed data.
 
-## Elo model
+## Rating model — Glicko-2
 
-Standard Elo (see [`src/lib/elo.ts`](src/lib/elo.ts)): expected score
-`E = 1 / (1 + 10^((Rb − Ra)/400))`, updated by `R' = R + K·(S − E)`. The exchange is
-symmetric, so the loser's lost points are exactly the winner's gained points —
-matching RiftELO's "points transfer from loser to winner." `elo:recompute` replays
-**all** matches in chronological order, so ratings are fully deterministic and
-re-derivable from match history at any time (it also stores a per-match
-`RatingChange` row to draw each player's rating curve).
+The ladder uses **Glicko-2** (see [`src/lib/glicko.ts`](src/lib/glicko.ts)), not
+plain Elo. Each player carries a rating **plus a rating deviation (RD)** — how
+unsure the system is — and a volatility. New players start with a large RD, so
+their early results move the rating hard; as they play, RD shrinks and the rating
+settles near their true skill. This deliberately avoids classic Elo's failure mode
+where a fixed 1000 seed acts as a soft floor and a beginner's most informative
+(first) games barely move the number.
+
+A rating stays **provisional** (shown with a `?`) until RD drops to
+`GLICKO_RD_ESTABLISHED`. The displayed "Elo" is the Glicko mean (rounded, centered
+on `ELO_START`); player pages also show the `± RD` uncertainty.
+
+We treat each match as its own rating period (the granularity lichess uses), so
+`elo:recompute` replays **all** matches in chronological order — ratings stay fully
+deterministic and re-derivable from match history, and each match still gets a
+`RatingChange` row to draw the rating curve.
 
 ## Scripts
 

@@ -92,6 +92,27 @@ async function request<T = unknown>(
   }
 }
 
+// Retry policy for transient failures. 429 (rate limited) and 5xx are worth
+// retrying; 4xx (auth, not-found, bad request) are not — they won't fix
+// themselves. Backoff is exponential with a small jitter, and we OBEY a
+// server-sent `Retry-After` when present — backing off on demand is what keeps
+// us from escalating a soft throttle into a hard block.
+const MAX_RETRIES = Number(process.env.INGEST_MAX_RETRIES ?? 4);
+
+/** Parse a Retry-After header (seconds, or an HTTP-date) into milliseconds. */
+function retryAfterMs(header: string | null): number | null {
+  if (!header) return null;
+  const secs = Number(header);
+  if (Number.isFinite(secs)) return Math.max(0, secs * 1000);
+  const when = Date.parse(header);
+  return Number.isNaN(when) ? null : Math.max(0, when - Date.now());
+}
+
+function backoffMs(attempt: number): number {
+  // 0.5s, 1s, 2s, 4s … capped at 30s, plus up to 250ms jitter.
+  return Math.min(30_000, 500 * 2 ** attempt) + Math.floor(Math.random() * 250);
+}
+
 async function doRequest<T = unknown>(
   path: string,
   init: RequestInit = {},
@@ -107,23 +128,39 @@ async function doRequest<T = unknown>(
     headers.Authorization = `${scheme} ${cachedToken}`;
   }
 
-  const res = await fetch(url, { ...init, headers });
-  const text = await res.text();
-  let json: unknown = undefined;
-  try {
-    json = text ? JSON.parse(text) : undefined;
-  } catch {
-    /* non-JSON body */
-  }
+  for (let attempt = 0; ; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, { ...init, headers });
+    } catch (err) {
+      // Network-level failure (reset/timeout/DNS). Retry a few times, then give up.
+      if (attempt >= MAX_RETRIES) throw err;
+      await sleep(backoffMs(attempt));
+      continue;
+    }
 
-  if (!res.ok) {
-    throw new CardeError(
-      `carde ${res.status} on ${path}`,
-      res.status,
-      json ?? text.slice(0, 300),
-    );
+    const text = await res.text();
+    let json: unknown = undefined;
+    try {
+      json = text ? JSON.parse(text) : undefined;
+    } catch {
+      /* non-JSON body */
+    }
+
+    if (res.ok) return json as T;
+
+    // Retry only on rate-limit / server errors; other 4xx are permanent.
+    const retriable = res.status === 429 || res.status >= 500;
+    if (!retriable || attempt >= MAX_RETRIES) {
+      throw new CardeError(
+        `carde ${res.status} on ${path}`,
+        res.status,
+        json ?? text.slice(0, 300),
+      );
+    }
+    const wait = retryAfterMs(res.headers.get("retry-after")) ?? backoffMs(attempt);
+    await sleep(wait);
   }
-  return json as T;
 }
 
 /** Exchange email/password for an API token (DRF-style token auth). */
@@ -311,6 +348,25 @@ export async function getRegistrations(
   eventId: number | string,
 ): Promise<Paginated<V2Registration>> {
   return request(`/api/v2/events/${eventId}/registrations/?page_size=500`);
+}
+
+/**
+ * Every registration across all pages (follows DRF `next`). Best-effort: returns
+ * whatever pages succeed. `first_name`/`last_name` are populated only when the
+ * caller is authorized for the event; otherwise entries carry `best_identifier`
+ * (first name + last initial) at most — callers should fall back accordingly.
+ */
+export async function getAllRegistrations(
+  eventId: number | string,
+): Promise<V2Registration[]> {
+  const out: V2Registration[] = [];
+  let url: string | null = `/api/v2/events/${eventId}/registrations/?page_size=500`;
+  for (let guard = 0; url && guard < 50; guard++) {
+    const page: Paginated<V2Registration> = await request(url);
+    if (page.results?.length) out.push(...page.results);
+    url = page.next ?? null;
+  }
+  return out;
 }
 
 /** Public decklist submissions for an event — often empty unless published. */

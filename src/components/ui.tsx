@@ -1,5 +1,26 @@
 import Link from "next/link";
 import { parseDomains } from "@/lib/format";
+import { isProvisional } from "@/lib/glicko";
+
+/**
+ * Shows a rating's uncertainty as "± RD" (the Glicko rating deviation) rather
+ * than a bare "?". A large ± means the rating is still provisional/calibrating;
+ * a small ± means it's settled.
+ */
+export function ProvisionalMark({ rd }: { rd: number }) {
+  return (
+    <span
+      title={
+        isProvisional(rd)
+          ? "Provisional — rating is still calibrating (high deviation)"
+          : "Rating deviation (uncertainty)"
+      }
+      className="ml-1 text-xs text-muted font-normal cursor-help"
+    >
+      ±{Math.round(rd)}
+    </span>
+  );
+}
 
 export function Card({
   children,

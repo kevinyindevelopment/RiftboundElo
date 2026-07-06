@@ -1,0 +1,67 @@
+# Scheduled, cloud-hosted data refresh for the RiftElo site.
+#
+# Runs on GitHub's always-on runners (NOT a personal PC), so the live site at
+# kevin-yin.com/riftelo stays fresh even when every local machine is off — which
+# was the whole problem: the old Windows Task Scheduler job only fired when the
+# work PC happened to be on, so weekends/holidays went stale.
+#
+# Scope: ONLY the tracked Michigan + California stores + UVS premier events (the
+# `ingest:stores` known-store path). NEVER `--global` — worldwide Riftbound is
+# ~59k events/day and would run for hours. See AGENTS.md / project memory.
+#
+# The scripts write straight to Neon over the direct connection, so no redeploy
+# is needed — the SSR site reads the new data on the next request.
+name: Update ratings
+
+on:
+  schedule:
+    # Every 3 hours (UTC). Fresh within hours during weekend/evening events;
+    # cheap on quiet weekday hours because unchanged events are skipped and the
+    # recompute only runs when new matches actually landed.
+    - cron: "0 */3 * * *"
+  # Allow manual runs from the Actions tab (useful for testing / on-demand).
+  workflow_dispatch:
+
+# Never let two refreshes overlap (they'd contend on the same Neon writes).
+concurrency:
+  group: update-ratings
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DIRECT_DATABASE_URL: ${{ secrets.DIRECT_DATABASE_URL }}
+      CARDE_TOKEN: ${{ secrets.CARDE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # postinstall runs `prisma generate`.
+      - run: npm ci
+
+      - name: Ingest new results (scoped to tracked stores + premier)
+        run: |
+          BEFORE=$(npx tsx scripts/match-count.ts)
+          echo "matches before: $BEFORE"
+          npm run ingest:stores
+          npm run ingest:stores -- --premier
+          AFTER=$(npx tsx scripts/match-count.ts)
+          echo "matches after:  $AFTER"
+          echo "MATCHES_BEFORE=$BEFORE" >> "$GITHUB_ENV"
+          echo "MATCHES_AFTER=$AFTER" >> "$GITHUB_ENV"
+
+      - name: Recompute ratings (only if new matches landed)
+        run: |
+          if [ "$MATCHES_BEFORE" != "$MATCHES_AFTER" ]; then
+            echo "Match count changed ($MATCHES_BEFORE -> $MATCHES_AFTER) — recomputing."
+            npm run elo:recompute
+          else
+            echo "No new matches — skipping recompute."
+          fi

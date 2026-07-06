@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { getLeaderboard } from "@/lib/queries";
-import { Card, PageTitle, PlayerLink } from "@/components/ui";
+import { Card, PageTitle, PlayerLink, ProvisionalMark } from "@/components/ui";
 import { RegionTabs } from "@/components/region-tabs";
 import { pct, winRate } from "@/lib/format";
 import { isRegion, REGION_LABELS, REGION_SUBTITLES } from "@/lib/regions";
@@ -17,7 +17,7 @@ export default async function RankingsPage({
 
   const subtitle = isRegion(region)
     ? `${REGION_LABELS[region]} — ${REGION_SUBTITLES[region]}`
-    : "Everyone starts at 1000; points transfer from the loser to the winner of each rated match.";
+    : "Glicko-2 ratings, regressed by sample size — since Riftbound has real variance, a small (or undefeated) record is regressed toward average until enough games prove it. Players with fewer than 10 games aren't ranked yet.";
 
   return (
     <div>
@@ -57,7 +57,10 @@ export default async function RankingsPage({
                   <td className="py-2 px-3">
                     <PlayerLink id={p.id} name={p.displayName} handle={p.handle} />
                   </td>
-                  <td className="text-right py-2 px-3 tabular-nums font-semibold text-accent">{p.rating}</td>
+                  <td className="text-right py-2 px-3 tabular-nums font-semibold text-accent">
+                    {p.rating}
+                    <ProvisionalMark rd={p.ratingDeviation} />
+                  </td>
                   <td className="text-right py-2 px-3 tabular-nums text-muted hidden sm:table-cell">{p.peakRating}</td>
                   <td className="text-right py-2 px-3 tabular-nums">{p.wins}-{p.losses}-{p.draws}</td>
                   <td className="text-right py-2 px-3 tabular-nums text-muted hidden sm:table-cell">

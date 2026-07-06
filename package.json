@@ -11,14 +11,21 @@
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
+    "db:export": "tsx scripts/db-export.ts",
+    "db:import": "tsx scripts/db-import.ts",
     "ingest": "tsx scripts/ingest.ts",
     "ingest:stores": "tsx scripts/ingest-stores.ts",
     "probe": "tsx scripts/probe.ts",
     "regions": "tsx scripts/assign-regions.ts",
     "seed": "tsx scripts/seed.ts",
-    "elo:recompute": "tsx scripts/recompute-elo.ts"
+    "elo:recompute": "tsx scripts/recompute-elo.ts",
+    "cf:build": "opennextjs-cloudflare build",
+    "cf:preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "cf:deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
+    "@prisma/adapter-neon": "^6.19.3",
     "@prisma/client": "^6.19.3",
     "dotenv": "^17.4.2",
     "next": "16.2.9",
@@ -28,6 +35,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@opennextjs/cloudflare": "^1.20.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
@@ -36,6 +44,7 @@
     "eslint-config-next": "16.2.9",
     "tailwindcss": "^4",
     "tsx": "^4.22.4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "wrangler": "^4.107.0"
   }
 }
