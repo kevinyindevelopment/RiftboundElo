@@ -53,8 +53,8 @@ next-env.d.ts
 .env.local
 .env.*.local
 
-# sqlite: the dev.db itself IS committed (public data, versioned in git);
-# only the transient journal/WAL files are ignored.
+# sqlite: legacy local DB, fully replaced by Neon Postgres — not tracked.
+*.db
 *.db-journal
 *.db-wal
 *.db-shm
