@@ -49,6 +49,12 @@ data changes.
   **unchanged events are skipped** (no write, no deep result-fetch). Only new/
   changed events get their rounds+standings+matches pulled. This is the routine
   update path — bounded and cheap in steady state.
+  - Events are classified by their **own `display_status`**, not the query bucket
+    (carde returns some upcoming/canceled events inside the "completed" listing).
+    `canceled` events are never result-fetched.
+  - **Upcoming events** get their **registration roster** pulled (so player lists
+    show before play). carde doesn't bump `updated_at` on registration, so these
+    are re-fetched every run — but only for upcoming events that have registrants.
 - `--premier` = also ingest the UVS Organized-Play hub store (`OP_STORE_IDS`,
   default 19428) where premier events (RQs) are hosted.
 - `--discover` / `--near` / `--mi-grid` / `--ca-grid` / `--state-grid` = geo-discovery
