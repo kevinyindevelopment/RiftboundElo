@@ -30,7 +30,9 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 60 min gives the one-time historical backfill + first large recompute room;
+    # steady-state runs finish in a handful of minutes, well under this.
+    timeout-minutes: 60
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       DIRECT_DATABASE_URL: ${{ secrets.DIRECT_DATABASE_URL }}
@@ -48,20 +50,20 @@ jobs:
 
       - name: Ingest new results (scoped to tracked stores + premier)
         run: |
-          BEFORE=$(npx tsx scripts/match-count.ts)
-          echo "matches before: $BEFORE"
+          BEFORE=$(npx tsx scripts/match-fingerprint.ts)
+          echo "match fingerprint before: $BEFORE"
           npm run ingest:stores
           npm run ingest:stores -- --premier
-          AFTER=$(npx tsx scripts/match-count.ts)
-          echo "matches after:  $AFTER"
-          echo "MATCHES_BEFORE=$BEFORE" >> "$GITHUB_ENV"
-          echo "MATCHES_AFTER=$AFTER" >> "$GITHUB_ENV"
+          AFTER=$(npx tsx scripts/match-fingerprint.ts)
+          echo "match fingerprint after:  $AFTER"
+          echo "FP_BEFORE=$BEFORE" >> "$GITHUB_ENV"
+          echo "FP_AFTER=$AFTER" >> "$GITHUB_ENV"
 
-      - name: Recompute ratings (only if new matches landed)
+      - name: Recompute ratings (only if match results changed)
         run: |
-          if [ "$MATCHES_BEFORE" != "$MATCHES_AFTER" ]; then
-            echo "Match count changed ($MATCHES_BEFORE -> $MATCHES_AFTER) — recomputing."
+          if [ "$FP_BEFORE" != "$FP_AFTER" ]; then
+            echo "Match results changed ($FP_BEFORE -> $FP_AFTER) — recomputing."
             npm run elo:recompute
           else
-            echo "No new matches — skipping recompute."
+            echo "No match-result changes — skipping recompute."
           fi
