@@ -22,10 +22,12 @@ import {
   getEventDetail,
   getRoundMatches,
   getRoundStandings,
+  getAllRegistrations,
   pool,
   type V2Event,
   type V2Store,
   type V2Match,
+  type V2Registration,
 } from "../src/lib/carde";
 
 // Default to the user's local Saginaw/Bay-area stores.
@@ -380,6 +382,60 @@ async function ingestEventResults(eventId: number) {
   return { players, matches, hasResults };
 }
 
+function regNum(r: V2Registration, key: string): number | null {
+  const v = (r as Record<string, unknown>)[key];
+  return typeof v === "number" ? v : null;
+}
+
+/**
+ * Ingest the registration roster for an event that has NOT published results yet
+ * (upcoming / just-started). carde exposes registrants before play, but does NOT
+ * bump the event's `updated_at` when someone signs up — so callers can't skip
+ * these incrementally and must re-fetch each run. Creates roster EventEntry rows
+ * (no records/standings yet); once results publish, `ingestEventResults` replaces
+ * them with the real standings. Returns the number of registrants written.
+ */
+async function ingestEventRoster(eventId: number): Promise<number> {
+  let regs: V2Registration[];
+  try {
+    regs = await getAllRegistrations(eventId);
+  } catch {
+    return 0;
+  }
+  if (!regs.length) return 0;
+
+  const eid = String(eventId);
+  const playerRows = new Map<string, { id: string; handle: string | null; displayName: string }>();
+  const entryRows = new Map<string, Record<string, unknown>>();
+  for (const r of regs) {
+    const uid = r.user?.id;
+    if (uid == null) continue;
+    const pid = String(uid);
+    const gamerTag = r.best_identifier || null; // e.g. "Tubesock"
+    const realName = r.user?.best_identifier || null; // e.g. "Aden F"
+    if (!playerRows.has(pid))
+      playerRows.set(pid, { id: pid, handle: gamerTag, displayName: realName || gamerTag || pid });
+    if (!entryRows.has(pid))
+      entryRows.set(pid, {
+        eventId: eid,
+        playerId: pid,
+        finalStanding: regNum(r, "final_place_in_standings"),
+        matchPoints: regNum(r, "total_match_points"),
+        matchesWon: regNum(r, "matches_won") ?? 0,
+        matchesLost: regNum(r, "matches_lost") ?? 0,
+        matchesDrawn: regNum(r, "matches_drawn") ?? 0,
+        deckId: null,
+      });
+  }
+  if (entryRows.size === 0) return 0;
+
+  // Players first (FK), then replace this event's entries so re-runs are idempotent.
+  await prisma.player.createMany({ data: [...playerRows.values()], skipDuplicates: true });
+  await prisma.eventEntry.deleteMany({ where: { eventId: eid } });
+  await prisma.eventEntry.createMany({ data: [...entryRows.values()] as never, skipDuplicates: true });
+  return entryRows.size;
+}
+
 // NOTE: the v2 events API misbehaves when several display_statuses are combined
 // (it collapses to upcoming-only), so we query each status separately and merge.
 const STATUSES = ["completed", "upcoming", "inProgress"] as const;
@@ -403,6 +459,7 @@ async function ingestStore(storeId: number, opts: { results: boolean; full: bool
   const seen = new Set<number>();
   let skipped = 0;
   const toFetch: number[] = []; // events needing the (expensive) result chain
+  const rostersToFetch: number[] = []; // upcoming events (with registrants) → roster
 
   // Prefetch what we already have for this store to drive incremental sync.
   const existing = new Map<string, number | null>();
@@ -432,8 +489,14 @@ async function ingestStore(storeId: number, opts: { results: boolean; full: bool
             storeUpserted = true;
           }
         }
-        const isCompleted = /complete/i.test(status);
-        const isUpcoming = /upcoming/i.test(status);
+        // Classify by the event's OWN status, not the query bucket: carde returns
+        // some upcoming events inside the "completed" listing, and since we dedupe
+        // by `seen` (completed is queried first), they'd otherwise be mislabeled by
+        // whichever bucket hit first — which hid their upcoming rosters.
+        const disp = (e.display_status ?? status).toLowerCase();
+        const isCompleted = disp.includes("complete");
+        const isUpcoming = disp.includes("upcoming");
+        const isCanceled = disp.includes("cancel"); // canceled/cancelled — no results ever
         const prev = existing.get(String(e.id));
         const apiUpdated = e.updated_at ? new Date(e.updated_at).getTime() : null;
         const changed = prev == null || apiUpdated == null || prev !== apiUpdated;
@@ -443,9 +506,16 @@ async function ingestStore(storeId: number, opts: { results: boolean; full: bool
         if (changed) await upsertEvent(e);
 
         const fetchResults =
-          opts.results && !isUpcoming && (opts.full || changed || !isCompleted);
+          opts.results && !isUpcoming && !isCanceled && (opts.full || changed || !isCompleted);
         if (fetchResults) toFetch.push(e.id);
-        else if (opts.results && isCompleted) skipped++;
+        else if (opts.results && (isCompleted || isCanceled)) skipped++;
+
+        // Upcoming events don't publish results, but carde exposes their
+        // registration roster. It can't be skipped incrementally (registering
+        // doesn't bump updated_at), so re-fetch every run — but only when there's
+        // someone registered, so empty upcoming events stay free.
+        const regCount = Number(e.registered_user_count ?? e.starting_player_count ?? 0);
+        if (opts.results && isUpcoming && regCount > 0) rostersToFetch.push(e.id);
       }
       if (!res.next) break;
       page++;
@@ -464,7 +534,17 @@ async function ingestStore(storeId: number, opts: { results: boolean; full: bool
     }
   });
 
-  console.log(`✓ ${storeName}: ${seen.size} events (${toFetch.length} fetched, ${skipped} unchanged-skipped)`);
+  // Pass 2b: pull registration rosters for upcoming events (so their player
+  // lists show before the event is played). Sum the pool's results — don't `+=`
+  // inside the workers (the read-before-await races under concurrency).
+  const rosterCounts = await pool(rostersToFetch, (id) => ingestEventRoster(id));
+  const rosterEntries = rosterCounts.reduce((a, b) => a + b, 0);
+
+  console.log(
+    `✓ ${storeName}: ${seen.size} events (${toFetch.length} fetched, ${skipped} unchanged-skipped` +
+      (rostersToFetch.length ? `, ${rostersToFetch.length} upcoming rosters/+${rosterEntries}` : "") +
+      `)`,
+  );
   return seen.size;
 }
 
