@@ -16,8 +16,8 @@
 # daily-update.ps1 maintenance logs
 /logs
 
-# scratch / ad-hoc timing logs
-.scratch_*.log
+# scratch / ad-hoc debug files
+.scratch_*
 
 # next.js
 /.next/
