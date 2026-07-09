@@ -187,8 +187,14 @@ model Match {
 }
 
 /// Per-player rating delta from a single match — powers the Elo history curve.
+/// This table is 100% DERIVED from Match (rewritten by scripts/recompute-elo.ts).
+/// It has NO synthetic id and NO createdAt: a row is uniquely a (player, match)
+/// pair, so that pair IS the primary key — which also drops the ~45 MB cuid-pkey
+/// index and a redundant unique index. `createdAt` was never chronological and
+/// never read (history sorts by Match.playedAt in getPlayerRatingHistory), so it
+/// was pure weight. Recompute writes only {playerId, matchId, ratingBefore,
+/// ratingAfter, delta}.
 model RatingChange {
-  id           String   @id @default(cuid())
   playerId     String
   player       Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
   matchId      String
@@ -196,10 +202,10 @@ model RatingChange {
   ratingBefore Int
   ratingAfter  Int
   delta        Int
-  createdAt    DateTime @default(now())
 
-  @@unique([playerId, matchId])
-  @@index([playerId, createdAt])
+  // Composite PK: the (player, match) pair. Its leading `playerId` also serves
+  // the history query's `where playerId` scan, so no separate playerId index.
+  @@id([playerId, matchId])
   // Index the FK so cascade-deleting matches (every event re-ingest does this)
   // doesn't seq-scan RatingChange — was O(n^2) and hung a cleanup.
   @@index([matchId])

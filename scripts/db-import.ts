@@ -21,11 +21,19 @@ const DATE_FIELDS: Record<string, string[]> = {
   players: ["createdAt", "updatedAt"],
   events: ["startDatetime", "endDatetime", "ingestedAt", "sourceUpdatedAt"],
   matches: ["playedAt"],
-  ratingChanges: ["createdAt"],
   ingestState: ["updatedAt"],
 };
 
+// Columns that older dumps carry but the current schema no longer has. Strip
+// them so createMany doesn't choke on unknown fields.
+const DROP_FIELDS: Record<string, string[]> = {
+  // RatingChange lost its cuid `id` and `createdAt` (see prisma/schema.prisma).
+  ratingChanges: ["id", "createdAt"],
+};
+
 function revive(rows: Record<string, unknown>[], key: string) {
+  const drop = DROP_FIELDS[key];
+  if (drop) for (const row of rows) for (const f of drop) delete row[f];
   const fields = DATE_FIELDS[key];
   if (!fields) return rows;
   for (const row of rows) {
