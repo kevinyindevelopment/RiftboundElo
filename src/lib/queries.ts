@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { fmtDate, ordinal } from "@/lib/format";
 import { isRegion } from "@/lib/regions";
 import {
   calendarForCountry,
@@ -415,6 +416,181 @@ export async function getPlayerEvents(playerId: string) {
     include: { event: { include: { store: true } } },
     orderBy: { event: { startDatetime: "desc" } },
   });
+}
+
+/**
+ * Notable competitive results shown as badges on a profile. Scope (constructed
+ * 1v1 only, plus the one lucrative team event) and thresholds are the product
+ * spec — see `classifyForAccomplishment` and the per-kind rules below.
+ */
+export type Accomplishment = {
+  key: string;
+  emoji: string;
+  label: string; // compact badge text
+  title: string; // full tooltip: event · date · placing
+  tier: "gold" | "silver" | "bronze";
+  eventId: string;
+  date: Date | null;
+  prestige: number; // sort key, higher = more impressive
+};
+
+type PremierKind =
+  | "skirmish"
+  | "pre-regional"
+  | "regional-rebound"
+  | "super-saturday"
+  | "main"
+  | "champions-2v2";
+
+// Sealed/draft are limited formats and don't count toward accomplishments.
+const LIMITED_FORMAT = /\bsealed\b|\bdraft\b/i;
+
+/**
+ * Map an event NAME to the accomplishment family it belongs to (or null if it's
+ * not an accomplishment-eligible event). Order matters: the specific RQ-week
+ * side events are matched before the generic "regional qualifier" main.
+ */
+function classifyForAccomplishment(name: string): PremierKind | null {
+  const n = name.toLowerCase();
+  if (n.includes("test event")) return null;
+  if (LIMITED_FORMAT.test(n)) return null;
+  // 2v2 Champions of the Rift is the only team event with prizing that counts.
+  if (n.includes("champions of the rift")) return "champions-2v2";
+  if (n.includes("2v2") || n.includes("team challenge")) return null;
+  if (n.includes("skirmish")) return "skirmish";
+  if (n.includes("pre-regional")) return "pre-regional";
+  if (n.includes("regional rebound")) return "regional-rebound";
+  if (n.includes("super saturday")) return "super-saturday";
+  if (n.includes("super nexus night")) return null; // Friday side event, not a criterion
+  if (n.includes("regional qualifier")) return "main";
+  return null;
+}
+
+/** Tightest standard elimination cut a final standing made, or null if outside top 128. */
+function cutBucket(standing: number): number | null {
+  for (const c of [8, 16, 32, 64, 128]) if (standing <= c) return c;
+  return null;
+}
+function cutTier(standing: number): "gold" | "silver" | "bronze" {
+  return standing <= 8 ? "gold" : standing <= 32 ? "silver" : "bronze";
+}
+
+export async function getPlayerAccomplishments(
+  playerId: string,
+): Promise<Accomplishment[]> {
+  const entries = await prisma.eventEntry.findMany({
+    where: { playerId },
+    select: {
+      finalStanding: true,
+      matchesWon: true,
+      matchesLost: true,
+      matchesDrawn: true,
+      deck: { select: { legend: true } },
+      event: {
+        select: { id: true, name: true, startDatetime: true, numPlayers: true },
+      },
+    },
+  });
+
+  const out: Accomplishment[] = [];
+  // Main-event entries that missed the top-128 cut but might place top-3 in
+  // their Legend — resolved in one batched pass below (needs a per-event query).
+  const legendChecks: { e: (typeof entries)[number]; legend: string }[] = [];
+
+  const placing = (s: number, n: number) => `${ordinal(s)} of ${n}`;
+  const title = (name: string, date: Date | null, extra: string) =>
+    `${name} · ${fmtDate(date)} · ${extra}`;
+
+  for (const e of entries) {
+    const kind = classifyForAccomplishment(e.event.name);
+    if (!kind) continue;
+    const s = e.finalStanding;
+    const n = e.event.numPlayers;
+    const date = e.event.startDatetime;
+    const evId = e.event.id;
+
+    if (kind === "skirmish") {
+      if (s === 1)
+        out.push({
+          key: `${evId}:sk`, emoji: "🥇", label: "1st", tier: "gold",
+          title: title(e.event.name, date, "1st place"),
+          eventId: evId, date, prestige: 300,
+        });
+    } else if (kind === "pre-regional" || kind === "regional-rebound") {
+      if (e.matchesWon >= 4) {
+        const tier = e.matchesWon >= 6 ? "gold" : e.matchesWon >= 5 ? "silver" : "bronze";
+        const fam = kind === "pre-regional" ? "Pre-Regional" : "Regional Rebound";
+        out.push({
+          key: `${evId}:pp`, emoji: "⚔️", label: `${e.matchesWon} wins`, tier,
+          title: title(e.event.name, date, `${fam} · ${e.matchesWon}-${e.matchesLost} record`),
+          eventId: evId, date, prestige: 400 + e.matchesWon,
+        });
+      }
+    } else if (kind === "super-saturday") {
+      const cut = s != null ? cutBucket(s) : null;
+      if (cut)
+        out.push({
+          key: `${evId}:ss`, emoji: "🎖️", label: `Top ${cut}`, tier: cutTier(s!),
+          title: title(e.event.name, date, `Super Saturday · ${placing(s!, n)}`),
+          eventId: evId, date, prestige: 500 + (200 - cut),
+        });
+    } else if (kind === "champions-2v2") {
+      const cut = s != null ? cutBucket(s) : null;
+      if (cut)
+        out.push({
+          key: `${evId}:c2`, emoji: "🏅", label: `Top ${cut}`, tier: cutTier(s!),
+          title: title(e.event.name, date, `2v2 Champions of the Rift · ${placing(s!, n)}`),
+          eventId: evId, date, prestige: 600 + (200 - cut),
+        });
+    } else if (kind === "main") {
+      const cut = s != null ? cutBucket(s) : null;
+      if (cut) {
+        out.push({
+          key: `${evId}:mn`, emoji: "🏆", label: `Top ${cut}`, tier: cutTier(s!),
+          title: title(e.event.name, date, `Regional Qualifier · ${placing(s!, n)}`),
+          eventId: evId, date, prestige: 800 + (200 - cut),
+        });
+      } else if (e.deck?.legend && s != null) {
+        legendChecks.push({ e, legend: e.deck.legend });
+      }
+    }
+  }
+
+  // "Top 3 in your given Legend" at a main event (only for entries outside the
+  // top-128 cut — a top-128 finish already earned a badge above).
+  if (legendChecks.length) {
+    const ranked = await Promise.all(
+      legendChecks.map(async ({ e, legend }) => ({
+        e,
+        legend,
+        better: await prisma.eventEntry.count({
+          where: {
+            eventId: e.event.id,
+            deck: { legend },
+            finalStanding: { not: null, lt: e.finalStanding! },
+          },
+        }),
+      })),
+    );
+    for (const { e, legend, better } of ranked) {
+      if (better >= 3) continue;
+      const place = better + 1;
+      out.push({
+        key: `${e.event.id}:lg`, emoji: "🃏",
+        label: `${ordinal(place)} · ${legend}`,
+        tier: place === 1 ? "gold" : "silver",
+        title: title(
+          e.event.name, e.event.startDatetime,
+          `Regional Qualifier · ${ordinal(place)} among ${legend} pilots · ${ordinal(e.finalStanding!)} overall`,
+        ),
+        eventId: e.event.id, date: e.event.startDatetime, prestige: 700 + (3 - better),
+      });
+    }
+  }
+
+  return out.sort(
+    (a, b) => b.prestige - a.prestige || (b.date?.getTime() ?? 0) - (a.date?.getTime() ?? 0),
+  );
 }
 
 export async function getPlayerRecentMatches(playerId: string, limit = 20) {

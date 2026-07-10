@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   getPlayer,
+  getPlayerAccomplishments,
   getPlayerEvents,
   getPlayerLegendStats,
   getPlayerMatchHistory,
@@ -16,6 +17,7 @@ import {
   ResultBadge,
   StatCard,
 } from "@/components/ui";
+import { Accomplishments } from "@/components/accomplishments";
 import { RatingChart, type RatingPoint } from "@/components/rating-chart";
 import { SetTabs } from "@/components/set-tabs";
 import { fmtDate, fmtDateShort, ordinal, pct, teamFormat, winRate } from "@/lib/format";
@@ -41,12 +43,13 @@ export default async function PlayerPage({
 
   const rated = player.gamesPlayed > 0;
   const provisional = isProvisional(player.ratingDeviation);
-  const [rank, history, events, matchHist, legends] = await Promise.all([
+  const [rank, history, events, matchHist, legends, accomplishments] = await Promise.all([
     rated ? getPlayerRank(player) : Promise.resolve(null),
     getPlayerRatingHistory(id),
     getPlayerEvents(id),
     getPlayerMatchHistory(id, { page: matchPage }),
     getPlayerLegendStats(id),
+    getPlayerAccomplishments(id),
   ]);
   const matches = matchHist.matches;
   // `legends` is the full (all-sets) history — drives whether the card shows.
@@ -132,6 +135,8 @@ export default async function PlayerPage({
           <StatCard label="Record" value={<span className="text-muted">—</span>} />
         </section>
       )}
+
+      <Accomplishments items={accomplishments} />
 
       {rated && (
         <Card className="p-4">

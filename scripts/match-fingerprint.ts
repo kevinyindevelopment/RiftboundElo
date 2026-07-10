@@ -19,15 +19,21 @@
  */
 import "dotenv/config";
 import { prisma } from "../src/lib/prisma";
+import { PRE_RIFT_SQL } from "../src/lib/prerift";
 
 (async () => {
+  // Fingerprint only the matches that actually feed Elo. Pre-Rift (set
+  // pre-release) events are excluded from ratings, so ingesting one must NOT
+  // trigger a recompute — keep this filter in lockstep with recompute-elo.
   const rows = await prisma.$queryRawUnsafe<Array<{ fp: string }>>(
     `SELECT count(*)::text || ':' || coalesce(sum(hashtext(
-        id || '|' || coalesce("winnerId", '') || '|' ||
-        "playerOneWins"::text || '|' || "playerTwoWins"::text || '|' ||
-        draws::text || '|' || "isBye"::text
+        m.id || '|' || coalesce(m."winnerId", '') || '|' ||
+        m."playerOneWins"::text || '|' || m."playerTwoWins"::text || '|' ||
+        m.draws::text || '|' || m."isBye"::text
       )::bigint), 0)::text AS fp
-     FROM "Match"`,
+     FROM "Match" m
+     JOIN "Event" e ON e.id = m."eventId"
+     WHERE e.name !~* '${PRE_RIFT_SQL}'`,
   );
   process.stdout.write(rows[0]?.fp ?? "0:0");
 })()
