@@ -11,9 +11,13 @@
  *      premier). Prediction = the Legend from their most recent event,
  *      tie-broken by how often they've piloted it.
  *
- * Reads are tiny (two indexed queries over ~128 player ids) — negligible Neon
- * egress. Designed to run in GitHub Actions (workflow legend-field.yml) where
- * the DB/carde secrets live; output goes to the workflow log.
+ * Also reports new-set (Vendetta) adoption: the tracked-store meta since the
+ * set's release, and which registrants have already played post-release events
+ * (their predictions are marked as new-set-aware).
+ *
+ * Reads are tiny (three indexed queries) — negligible Neon egress. Designed to
+ * run in GitHub Actions (workflow legend-field.yml) where the DB/carde secrets
+ * live; output goes to the workflow log.
  */
 import "dotenv/config";
 import { prisma } from "../src/lib/prisma";
@@ -26,6 +30,17 @@ import {
 } from "../src/lib/carde";
 
 const EVENT = Number(process.argv[2] ?? 791304);
+
+// Vendetta (set 4) released 2026-07-31 and added nine NEW champions to the
+// legend pool. Any tracked event since then is post-Vendetta meta — the best
+// available signal for whether the field will bring new-set decks.
+const NEW_SET_SINCE = process.env.NEW_SET_SINCE ?? "2026-07-31";
+const NEW_SET_CHAMPS = [
+  "Akali", "Zed", "Kennen", "Shen", "Mel", "Jayce", "Ambessa", "Renekton", "Nasus",
+];
+const isNewSet = (legend: string) =>
+  NEW_SET_CHAMPS.some((c) => legend === c || legend.startsWith(`${c},`));
+const vTag = (legend: string) => (isNewSet(legend) ? " [VENDETTA]" : "");
 
 /** Recursively scan an unknown payload for legend names keyed by user id. */
 function scanForLegends(node: unknown, out: Map<number, string>, userId?: number) {
@@ -101,7 +116,8 @@ async function main() {
 
   // ---- Source 2: DB history ---------------------------------------------
   const ids = roster.map((r) => r.pid);
-  const [players, entries] = await Promise.all([
+  const sinceDate = new Date(NEW_SET_SINCE);
+  const [players, entries, recentMeta] = await Promise.all([
     prisma.player.findMany({
       where: { id: { in: ids } },
       select: { id: true, displayName: true, rating: true, gamesPlayed: true },
@@ -112,6 +128,19 @@ async function main() {
         playerId: true,
         deck: { select: { legend: true, name: true } },
         event: { select: { startDatetime: true } },
+      },
+    }),
+    // Whole tracked meta since the new set's release (all players, not just
+    // this event's roster) — measures new-set adoption in the wild.
+    prisma.eventEntry.findMany({
+      where: {
+        deckId: { not: null },
+        event: { startDatetime: { gte: sinceDate } },
+      },
+      select: {
+        playerId: true,
+        deck: { select: { legend: true, name: true } },
+        event: { select: { name: true, startDatetime: true } },
       },
     }),
   ]);
@@ -138,12 +167,17 @@ async function main() {
     games?: number;
     legend: string | null;
     source: "submitted" | "recent" | "none";
+    fresh: boolean; // prediction backed by a post-new-set event
     history: string;
   }
+  const sinceT = sinceDate.getTime();
   const rows: Row[] = [];
   for (const r of roster) {
     const p = known.get(r.pid);
     const byLegend = hist.get(r.pid);
+    const fresh = byLegend
+      ? Math.max(...[...byLegend.values()].map((v) => v.last)) >= sinceT
+      : false;
     let legend: string | null = null;
     let source: Row["source"] = "none";
     if (submitted.has(r.uid)) {
@@ -169,6 +203,7 @@ async function main() {
       games: p?.gamesPlayed,
       legend,
       source,
+      fresh,
       history,
     });
   }
@@ -179,8 +214,64 @@ async function main() {
     `\ncoverage: ${known.size}/${roster.length} registrants known to the DB, ` +
       `${withLegend.length} with a legend signal ` +
       `(${rows.filter((r) => r.source === "submitted").length} submitted, ` +
-      `${rows.filter((r) => r.source === "recent").length} inferred from history)\n`,
+      `${rows.filter((r) => r.source === "recent").length} inferred from history; ` +
+      `${rows.filter((r) => r.source === "recent" && r.fresh).length} of those ` +
+      `from a post-${NEW_SET_SINCE} event)\n`,
   );
+
+  // ---- New-set adoption in the tracked meta ------------------------------
+  const metaCount = new Map<string, number>();
+  const metaEvents = new Set<string>();
+  for (const e of recentMeta) {
+    const legend = e.deck?.legend ?? e.deck?.name;
+    if (!legend) continue;
+    metaCount.set(legend, (metaCount.get(legend) ?? 0) + 1);
+    metaEvents.add(`${e.event.name} (${e.event.startDatetime?.toISOString().slice(0, 10)})`);
+  }
+  const metaTotal = [...metaCount.values()].reduce((a, b) => a + b, 0);
+  const newSetTotal = [...metaCount.entries()]
+    .filter(([l]) => isNewSet(l))
+    .reduce((a, [, n]) => a + n, 0);
+  console.log(
+    `=== TRACKED META SINCE ${NEW_SET_SINCE} (${metaEvents.size} events, ${metaTotal} deck entries) ===`,
+  );
+  console.log(
+    `new-set legends: ${newSetTotal}/${metaTotal} entries ` +
+      `(${metaTotal ? ((100 * newSetTotal) / metaTotal).toFixed(1) : 0}%)`,
+  );
+  for (const [legend, n] of [...metaCount.entries()].sort((a, b) => b[1] - a[1])) {
+    console.log(
+      `${String(n).padStart(3)}  ${((100 * n) / metaTotal).toFixed(1).padStart(5)}%  ${legend}${vTag(legend)}`,
+    );
+  }
+
+  // ---- Which registrants have shown up post-release, and on what ---------
+  const rosterIds = new Set(ids);
+  const seenRecent = new Map<string, Map<string, number>>(); // pid -> legend -> n
+  for (const e of recentMeta) {
+    if (!rosterIds.has(e.playerId)) continue;
+    const legend = e.deck?.legend ?? e.deck?.name;
+    if (!legend) continue;
+    let m = seenRecent.get(e.playerId);
+    if (!m) seenRecent.set(e.playerId, (m = new Map()));
+    m.set(legend, (m.get(legend) ?? 0) + 1);
+  }
+  console.log(
+    `\n=== REGISTRANTS SEEN IN TRACKED EVENTS SINCE ${NEW_SET_SINCE} (${seenRecent.size}) ===`,
+  );
+  for (const r of roster) {
+    const m = seenRecent.get(r.pid);
+    if (!m) continue;
+    const p = known.get(r.pid);
+    const legends = [...m.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([l, n]) => `${l}${vTag(l)}×${n}`)
+      .join(", ");
+    console.log(
+      `${r.realName.padEnd(24)} ${String(p?.rating ?? "?").padEnd(6)} ${legends}`,
+    );
+  }
+  console.log();
 
   const dist = new Map<string, Row[]>();
   for (const r of withLegend) {
@@ -199,7 +290,7 @@ async function main() {
       .map((p) => `${p.name} (${p.rating})`)
       .join(", ");
     console.log(
-      `${String(pilots.length).padStart(3)}  ${pct.padStart(5)}%  ${legend.padEnd(34)} top: ${top || "-"}`,
+      `${String(pilots.length).padStart(3)}  ${pct.padStart(5)}%  ${(legend + vTag(legend)).padEnd(34)} top: ${top || "-"}`,
     );
   }
 
@@ -207,8 +298,9 @@ async function main() {
   for (const r of [...rows].sort((a, b) => (b.rating ?? -1) - (a.rating ?? -1))) {
     const tag = r.tag && r.tag !== r.name ? ` "${r.tag}"` : "";
     const rate = r.rating != null ? `${r.rating} (${r.games}g)` : "unknown";
+    const src = r.source === "recent" && r.fresh ? "recent✓post-set" : r.source;
     console.log(
-      `${(r.name + tag).padEnd(36)} ${rate.padEnd(14)} ${(r.legend ?? "?").padEnd(34)} [${r.source}] ${r.history}`,
+      `${(r.name + tag).padEnd(36)} ${rate.padEnd(14)} ${(r.legend ?? "?").padEnd(34)} [${src}] ${r.history}`,
     );
   }
 
