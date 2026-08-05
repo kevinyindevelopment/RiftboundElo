@@ -1,0 +1,34 @@
+# On-demand legend-field analysis for an upcoming event (default 791304,
+# Gen.G LA Showdown Series). Runs where the DB/carde secrets live; read the
+# distribution from the job log. Manual-only — no schedule.
+name: Legend field analysis
+
+on:
+  workflow_dispatch:
+    inputs:
+      event_id:
+        description: "carde.io event id"
+        required: false
+        default: "791304"
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DIRECT_DATABASE_URL: ${{ secrets.DIRECT_DATABASE_URL }}
+      CARDE_TOKEN: ${{ secrets.CARDE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # postinstall runs `prisma generate`.
+      - run: npm ci
+
+      - name: Analyze legend field
+        run: npx tsx scripts/legend-field.ts "${{ inputs.event_id }}"
