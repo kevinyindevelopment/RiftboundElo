@@ -369,6 +369,19 @@ export async function getAllRegistrations(
   return out;
 }
 
+/**
+ * A deck's auxiliary cards (Legend/Champion/Battlefields). Auth-gated: the
+ * public deck detail endpoint omits these sections for imported decks.
+ */
+export async function getDeckAuxiliaryCards(
+  deckId: string,
+): Promise<CardeDeckCardSlot[]> {
+  const res = await request<CardeDeckCardSlot[] | { results?: CardeDeckCardSlot[] }>(
+    `/api/v2/deckbuilder/decks/${deckId}/auxiliary-cards/`,
+  );
+  return Array.isArray(res) ? res : (res.results ?? []);
+}
+
 /** Public decklist submissions for an event — often empty unless published. */
 export async function getDeckSubmissions(eventId: number | string): Promise<{
   event_id: number;

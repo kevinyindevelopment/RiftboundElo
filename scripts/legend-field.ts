@@ -24,6 +24,7 @@ import { prisma } from "../src/lib/prisma";
 import {
   getAllRegistrations,
   getDeckSubmissions,
+  getDeckAuxiliaryCards,
   getEventDetail,
   hasToken,
   CardeError,
@@ -98,13 +99,23 @@ async function main() {
       const subs = await getDeckSubmissions(EVENT);
       console.log(`deck submissions endpoint: total=${subs.total_submissions}`);
       scanForLegends(subs.submissions, submitted);
-      console.log(`  -> legends extracted for ${submitted.size} players`);
-      if (subs.total_submissions > 0 && submitted.size === 0) {
-        console.log(
-          "  (submissions present but no legend field found — raw sample below)",
-        );
-        console.log(JSON.stringify(subs.submissions[0]).slice(0, 1500));
+      // Submission payloads carry deck_id but not the deck's legend; resolve
+      // via the (auth-gated) auxiliary-cards endpoint.
+      for (const s of subs.submissions as Array<Record<string, unknown>>) {
+        const uid = typeof s.user_id === "number" ? s.user_id : null;
+        const deckId = typeof s.deck_id === "string" ? s.deck_id : null;
+        if (uid == null || deckId == null || submitted.has(uid)) continue;
+        try {
+          const aux = await getDeckAuxiliaryCards(deckId);
+          const legend = aux.find(
+            (a) => a.auxiliary_type?.code?.toLowerCase() === "legend",
+          )?.card?.name;
+          if (legend) submitted.set(uid, legend);
+        } catch {
+          /* deck private or endpoint refused — skip */
+        }
       }
+      console.log(`  -> legends extracted for ${submitted.size} players`);
     } catch (e) {
       console.log(
         `deck submissions unavailable: ${e instanceof CardeError ? e.status : e}`,
@@ -244,6 +255,120 @@ async function main() {
       `${String(n).padStart(3)}  ${((100 * n) / metaTotal).toFixed(1).padStart(5)}%  ${legend}${vTag(legend)}`,
     );
   }
+
+  // ---- Historical precedent: Unleashed (set 3) adoption curve ------------
+  // Unleashed released (EN) 2026-05-08 and added 12 champions. Measure how
+  // fast its legends took over tracked events — the best available prior for
+  // how much Vendetta will show up on a date ~2 weeks after ITS release.
+  const S3_RELEASE = new Date("2026-05-08");
+  const rosterIdSet = new Set(ids);
+  const S3_CHAMPS = [
+    "Vi", "Vex", "Diana", "Ivern", "Jhin", "Kha'Zix",
+    "LeBlanc", "Lillia", "Master Yi", "Poppy", "Pyke", "Rengar",
+  ];
+  const s3Decks = await prisma.deck.findMany({
+    where: { OR: S3_CHAMPS.map((c) => ({ legend: { startsWith: c } })) },
+    select: { id: true, legend: true },
+  });
+  // Empirical check: a candidate legend really is set-3-new only if its first
+  // appearance in the full entry history is at/after the release window.
+  const firstSeen = new Map<string, number>();
+  if (s3Decks.length) {
+    const s3All = await prisma.eventEntry.findMany({
+      where: { deckId: { in: s3Decks.map((d) => d.id) } },
+      select: { deckId: true, event: { select: { startDatetime: true } } },
+    });
+    for (const e of s3All) {
+      const t = e.event.startDatetime?.getTime();
+      if (t == null || e.deckId == null) continue;
+      const cur = firstSeen.get(e.deckId);
+      if (cur == null || t < cur) firstSeen.set(e.deckId, t);
+    }
+  }
+  const graceT = new Date("2026-05-01").getTime(); // prerelease grace
+  const s3NewIds = new Set(
+    s3Decks
+      .filter((d) => (firstSeen.get(d.id) ?? Infinity) >= graceT)
+      .map((d) => d.id),
+  );
+  const s3OldTimers = s3Decks.filter((d) => !s3NewIds.has(d.id));
+  if (s3OldTimers.length) {
+    console.log(
+      `note: candidate set-3 legends seen BEFORE release (excluded): ` +
+        s3OldTimers
+          .map((d) => `${d.legend} (first ${new Date(firstSeen.get(d.id)!).toISOString().slice(0, 10)})`)
+          .join("; "),
+    );
+  }
+
+  const winEntries = await prisma.eventEntry.findMany({
+    where: {
+      deckId: { not: null },
+      event: {
+        startDatetime: { gte: new Date("2026-04-24"), lt: new Date("2026-06-20") },
+      },
+    },
+    select: {
+      playerId: true,
+      deckId: true,
+      event: { select: { startDatetime: true, numPlayers: true, name: true } },
+    },
+  });
+  const WEEK = 7 * 24 * 3600 * 1000;
+  const byWeek = new Map<number, { total: number; s3: number }>();
+  const bigEvents = new Map<string, { total: number; s3: number; when: string }>();
+  const rosterS3Adopters = new Map<string, number>(); // pid -> days-to-first-s3-deck
+  for (const e of winEntries) {
+    const t = e.event.startDatetime?.getTime();
+    if (t == null) continue;
+    const wk = Math.floor((t - S3_RELEASE.getTime()) / WEEK);
+    const b = byWeek.get(wk) ?? { total: 0, s3: 0 };
+    b.total++;
+    const isS3 = e.deckId != null && s3NewIds.has(e.deckId);
+    if (isS3) b.s3++;
+    byWeek.set(wk, b);
+    if ((e.event.numPlayers ?? 0) >= 32 && t >= S3_RELEASE.getTime()) {
+      const key = `${e.event.name}`;
+      const g = bigEvents.get(key) ?? {
+        total: 0, s3: 0, when: e.event.startDatetime!.toISOString().slice(0, 10),
+      };
+      g.total++;
+      if (isS3) g.s3++;
+      bigEvents.set(key, g);
+    }
+    if (isS3 && rosterIdSet.has(e.playerId)) {
+      const days = Math.floor((t - S3_RELEASE.getTime()) / (24 * 3600 * 1000));
+      const cur = rosterS3Adopters.get(e.playerId);
+      if (cur == null || days < cur) rosterS3Adopters.set(e.playerId, days);
+    }
+  }
+  console.log(
+    `=== PRECEDENT: UNLEASHED (SET 3) ADOPTION AFTER 2026-05-08 RELEASE ===`,
+  );
+  for (const wk of [...byWeek.keys()].sort((a, b) => a - b)) {
+    const b = byWeek.get(wk)!;
+    const label =
+      wk < 0 ? `wk ${wk} (pre)` : `wk +${wk + 1} (days ${wk * 7}-${wk * 7 + 6})`;
+    console.log(
+      `${label.padEnd(24)} ${String(b.s3).padStart(4)}/${String(b.total).padEnd(5)} = ${((100 * b.s3) / (b.total || 1)).toFixed(1)}% set-3 legends`,
+    );
+  }
+  if (bigEvents.size) {
+    console.log(`\nlarger events (32+ players) in the first weeks:`);
+    for (const [name, g] of [...bigEvents.entries()].sort((a, b) =>
+      a[1].when.localeCompare(b[1].when),
+    )) {
+      console.log(
+        `  ${g.when}  ${String(g.s3).padStart(3)}/${String(g.total).padEnd(4)} (${((100 * g.s3) / g.total).toFixed(0)}%)  ${name}`,
+      );
+    }
+  }
+  const adopters14 = [...rosterS3Adopters.values()].filter((d) => d <= 14).length;
+  console.log(
+    `\nTHIS event's registrants during that window: ${rosterS3Adopters.size} ` +
+      `played a set-3 legend within the first 6 weeks; ${adopters14} did so ` +
+      `within 14 days of release (the Gen.G event is day 15 for Vendetta).\n`,
+  );
 
   // ---- Which registrants have shown up post-release, and on what ---------
   const rosterIds = new Set(ids);
