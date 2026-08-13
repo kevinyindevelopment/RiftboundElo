@@ -29,7 +29,10 @@ async function main() {
 
   const tables = await prisma.$queryRawUnsafe<
     { name: string; total: bigint; heap: bigint; idx: bigint; toast: bigint | null; rows: bigint }[]
-  >(`SELECT c.relname AS name,
+  // NOTE: pg_class.relname and the pg_stat_* name columns are Postgres `name`
+  // type, which the Neon driver adapter cannot deserialize
+  // (UnsupportedNativeDataType). Every one of them must be cast to text.
+  >(`SELECT c.relname::text AS name,
             pg_total_relation_size(c.oid) AS total,
             pg_relation_size(c.oid) AS heap,
             pg_indexes_size(c.oid) AS idx,
@@ -48,7 +51,7 @@ async function main() {
 
   const idx = await prisma.$queryRawUnsafe<
     { tbl: string; idx: string; size: bigint; scans: bigint }[]
-  >(`SELECT relname AS tbl, indexrelname AS idx,
+  >(`SELECT relname::text AS tbl, indexrelname::text AS idx,
             pg_relation_size(indexrelid) AS size, idx_scan AS scans
      FROM pg_stat_user_indexes ORDER BY pg_relation_size(indexrelid) DESC LIMIT 25`);
   console.log(`\n${pad("INDEX", 44)}${rpad("SIZE", 10)}${rpad("SCANS", 12)}`);
@@ -60,7 +63,7 @@ async function main() {
 
   const dead = await prisma.$queryRawUnsafe<
     { relname: string; live: bigint; dead: bigint; vac: Date | null }[]
-  >(`SELECT relname, n_live_tup AS live, n_dead_tup AS dead,
+  >(`SELECT relname::text AS relname, n_live_tup AS live, n_dead_tup AS dead,
             GREATEST(last_autovacuum, last_vacuum) AS vac
      FROM pg_stat_user_tables WHERE n_dead_tup > 0 ORDER BY n_dead_tup DESC`);
   console.log(`\n${pad("BLOAT (dead tuples)", 20)}${rpad("LIVE", 12)}${rpad("DEAD", 12)}  LAST VACUUM`);

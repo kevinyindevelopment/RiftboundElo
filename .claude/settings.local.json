@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(& \"C:\\\\Users\\\\MSI-Stealth\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-MSI-Stealth-Documents-GitHub-RiftboundElo\\\\e972eaf7-3203-43a3-ac7e-d43ca2c7d575\\\\scratchpad\\\\gh-create.ps1\")",
+      "PowerShell(& \"C:\\\\Users\\\\MSI-Stealth\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-MSI-Stealth-Documents-GitHub-RiftboundElo\\\\e972eaf7-3203-43a3-ac7e-d43ca2c7d575\\\\scratchpad\\\\gh-push.ps1\")"
+    ]
+  }
+}

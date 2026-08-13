@@ -14,19 +14,24 @@
 name: Update ratings
 
 on:
-  # ⛔ SCHEDULE PAUSED — Neon's data-transfer quota was exhausted (HTTP 402:
-  # "Your project has exceeded the data transfer quota"), which took the live
-  # site down: every query was refused, so every page 500'd.
-  #
-  # Cause: each recompute DOWNLOADS whole tables — ~500k Match rows and ~660k
-  # RatingChange rows — to diff them client-side. At ~8 runs/day that is well
-  # over a GB/day of egress against a 5 GB/month allowance, i.e. the whole
-  # month's transfer in a few days.
-  #
-  # Re-enable by uncommenting the cron below ONCE the recompute no longer pulls
-  # full tables over the wire. Manual runs still work from the Actions tab.
-  #   - cron: "0 */3 * * *"
-  #
+  schedule:
+    # Every 3 hours (UTC). Fresh within hours during weekend/evening events;
+    # cheap on quiet weekday hours because unchanged events are skipped and the
+    # recompute only runs when new matches actually landed.
+    #
+    # ⚠️ COST NOTE. This schedule once exhausted Neon's monthly data-transfer
+    # quota in a few days, which took the live site down hard: Neon began
+    # refusing EVERY query with HTTP 402, so every page 500'd. The cause was
+    # recompute downloading whole tables each run (~91 MB: all Match rows with
+    # each event's name inlined per row, plus the entire RatingChange table) to
+    # diff them client-side.
+    #
+    # That is fixed — recompute now pulls ~22 MB and diffs inside Postgres via
+    # ON CONFLICT ... WHERE IS DISTINCT FROM (verified: byte-identical output).
+    # If transfer ever becomes tight again, HALVING THIS SCHEDULE is the
+    # cheapest lever: local events cluster on evenings/weekends, so "0 */6"
+    # loses very little freshness.
+    - cron: "0 */3 * * *"
   # Allow manual runs from the Actions tab (useful for testing / on-demand).
   workflow_dispatch:
 
