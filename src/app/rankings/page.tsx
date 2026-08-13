@@ -8,7 +8,7 @@ import { isRegion, REGION_LABELS, REGION_SUBTITLES } from "@/lib/regions";
 // Reading searchParams already forces per-request rendering; `revalidate`
 // (rather than `force-dynamic`) is what lets the cached queries inside actually
 // serve from cache — see src/lib/cache.ts.
-export const revalidate = 300;
+export const revalidate = 1800;
 
 export default async function RankingsPage({
   searchParams,

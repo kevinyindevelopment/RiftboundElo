@@ -1,4 +1,19 @@
 <!-- BEGIN:nextjs-agent-rules -->
+# Cost is the number one priority
+
+Running this project as cheaply as possible outranks other concerns. **Read
+[COST.md](COST.md) before optimising anything** — it has the actual Neon price
+list and what it implies. The short version, because it is counter-intuitive:
+
+- **Compute awake-time is the main cost.** Neon scales to zero after 5 min idle,
+  so a query running hourly is cheaper than a leaner one running every 2 minutes.
+  Cache with LONG TTLs; fewer scheduled runs beats faster ones.
+- **Transfer is no longer a constraint** — 500 GB/month included, we use ~1%.
+  Optimising egress for its own sake is wasted effort now (it wasn't in the past:
+  it caused a full outage on the old free plan — see DEPLOYMENT.md).
+- **Storage is ~$0.12/month.** Don't contort the schema to save megabytes.
+- **Don't rewrite unchanged rows** — retained history bills separately.
+
 # This is NOT the Next.js you know
 
 This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.

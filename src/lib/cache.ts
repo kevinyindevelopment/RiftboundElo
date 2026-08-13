@@ -34,16 +34,25 @@
 import { unstable_cache } from "next/cache";
 
 /**
- * Seconds a cached read may be served before it is refreshed. Ingest runs every
- * 3 hours, so these are all far fresher than the underlying data.
+ * Seconds a cached read may be served before it is refreshed.
+ *
+ * These are deliberately LONG, and that is a COST decision — see COST.md.
+ * Neon scales to zero after 5 minutes idle and bills compute by awake-time, so
+ * the TTL sets how often the database is woken. Source data only changes when
+ * the ingest lands (every 3 hours, see .github/workflows/update.yml), so a
+ * 2-minute TTL buys no freshness anybody can perceive while costing up to 15x
+ * the wakes of a 30-minute one.
+ *
+ * The floor that matters is 5 minutes: a TTL below that guarantees Neon can
+ * never suspend under steady traffic. Nothing here is below it.
  */
 export const TTL = {
-  /** Lists that visibly move during an event day. */
-  short: 120,
+  /** Listings that move when new events are ingested. Still >> the 3h cadence. */
+  short: 600, // 10 min
   /** Default for dashboards, ladders and listings. */
-  medium: 300,
-  /** Whole-history aggregates that are expensive and change slowly. */
-  long: 900,
+  medium: 1800, // 30 min
+  /** Whole-history aggregates: expensive, and change only after a recompute. */
+  long: 3600, // 1 hour
 } as const;
 
 /** Field names holding Prisma `DateTime` values in anything we cache. */

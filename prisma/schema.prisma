@@ -179,7 +179,13 @@ model Match {
   changes RatingChange[]
 
   @@index([eventId, roundNumber])
-  @@index([playedAt])
+  // NOTE: there is deliberately NO index on `playedAt` alone. There was one; it
+  // cost 9.8 MB and had been used 70 times in the database's whole life. Both
+  // queries that order by playedAt (getPlayerRecentMatches, getPlayerMatchHistory)
+  // also filter by player, so they use the FK indexes below and sort the handful
+  // of rows that survive — a playedAt index cannot help them. It only added write
+  // cost to every match ingested. Don't re-add it without checking idx_scan first
+  // (npx tsx scripts/db-audit.ts).
   // FK-column indexes: without these, deleting a player (or a cascade cleanup)
   // seq-scans Match, and the player pages scan to find a player's matches.
   @@index([playerOneId])

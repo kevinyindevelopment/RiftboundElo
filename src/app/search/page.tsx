@@ -4,10 +4,10 @@ import { Card, PageTitle, PlayerLink, ProvisionalMark } from "@/components/ui";
 import { regionLabel } from "@/lib/regions";
 import { fmtDate } from "@/lib/format";
 
-// Search results are keyed on a free-text term, so `searchAll` is deliberately
-// NOT cached (unbounded cache keys). Reading searchParams keeps this page
-// per-request anyway; `revalidate` only affects any cached query it may add.
-export const revalidate = 300;
+// Reading searchParams keeps this page per-request; `revalidate` (rather than
+// `force-dynamic`) is what lets `searchAll`'s cache actually work, which stops
+// a crawler walking /search?q=... URLs from holding Neon open. See COST.md.
+export const revalidate = 600;
 
 type Cursor = "pp" | "sp" | "ep";
 type Cursors = { pp: number; sp: number; ep: number };

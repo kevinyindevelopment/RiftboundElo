@@ -23,6 +23,27 @@ function eventRegion(region?: string) {
 }
 
 /**
+ * Events that are worth showing. A cancelled event nobody registered for is
+ * pure noise — it never happened and has no roster, standings or matches to
+ * look at. carde produces a LOT of these: 11,021 of 28,900 events (38%) are
+ * cancelled with zero registrations, and not one of them has a single match.
+ *
+ * carde spells it "canceled"; both spellings are matched so a source change
+ * can't silently un-hide thousands of rows. Exported so listings and the
+ * counts beside them stay in agreement — if a page shows "N events" but lists
+ * fewer, this fragment was missed somewhere.
+ *
+ * NOTE: this hides, it does not delete. The rows stay ingested (a direct link
+ * to one still resolves), and re-ingest keeps working.
+ */
+export const CANCELED_STATUSES = ["canceled", "cancelled"];
+export const visibleEvent = {
+  NOT: { AND: [{ status: { in: CANCELED_STATUSES } }, { numPlayers: 0 }] },
+};
+/** Same predicate for the raw-SQL counts. `e` is the Event alias. */
+const VISIBLE_EVENT_SQL = `NOT (LOWER(COALESCE(e.status,'')) IN ('canceled','cancelled') AND e."numPlayers" = 0)`;
+
+/**
  * The ranked ladder: players with at least MIN_RANKED_GAMES games. `rating` is
  * already the sample-size–regressed value (see recompute-elo / glicko), so a
  * straight sort by it ranks proven players above small lucky/unlucky samples.
@@ -57,7 +78,7 @@ export const getGlobalStats = cachedQuery(async function getGlobalStats() {
   >(
     `SELECT (SELECT COUNT(*) FROM "Player")::int AS players,
             (SELECT COUNT(*) FROM "Player" WHERE "gamesPlayed" >= $1)::int AS "rankedPlayers",
-            (SELECT COUNT(*) FROM "Event")::int AS events,
+            (SELECT COUNT(*) FROM "Event" e WHERE ${VISIBLE_EVENT_SQL})::int AS events,
             (SELECT COUNT(*) FROM "Match")::int AS matches,
             (SELECT COUNT(*) FROM "Deck")::int AS decks,
             (SELECT COUNT(*) FROM "Store")::int AS stores`,
@@ -73,7 +94,7 @@ const now = () => new Date();
 export const getUpcomingEvents = cachedQuery(
   async function getUpcomingEvents(limit = 12, region?: string) {
     return prisma.event.findMany({
-      where: { startDatetime: { gte: now() }, ...eventRegion(region) },
+      where: { startDatetime: { gte: now() }, ...eventRegion(region), ...visibleEvent },
       orderBy: { startDatetime: "asc" },
       take: limit,
       include: { store: true },
@@ -86,7 +107,7 @@ export const getUpcomingEvents = cachedQuery(
 export const getRecentEvents = cachedQuery(
   async function getRecentEvents(limit = 12, region?: string) {
     return prisma.event.findMany({
-      where: { startDatetime: { lt: now() }, ...eventRegion(region) },
+      where: { startDatetime: { lt: now() }, ...eventRegion(region), ...visibleEvent },
       orderBy: { startDatetime: "desc" },
       take: limit,
       include: { store: true, _count: { select: { entries: true } } },
@@ -103,7 +124,15 @@ export const SEARCH_PAGE_SIZE = 25;
  * Returns ALL matches, paginated independently per section. `playerPage` and
  * `storePage` are 1-based; out-of-range pages clamp to the last page.
  */
-export async function searchAll(
+/**
+ * Cached despite the unbounded key space (one entry per search term). Every
+ * uncached search is 6 queries — and `contains` + `mode: "insensitive"` compiles
+ * to `ILIKE '%term%'`, which no btree index can serve, so each one is a seq scan
+ * (measured: ~14ms over 33k players — fine on its own). The reason to cache is
+ * COST, not speed: an uncached search wakes Neon, and a crawler walking
+ * `/search?q=...` URLs would hold the database open indefinitely. See COST.md.
+ */
+export const searchAll = cachedQuery(async function searchAll(
   query: string,
   { playerPage = 1, storePage = 1, eventPage = 1, pageSize = SEARCH_PAGE_SIZE } = {},
 ) {
@@ -144,6 +173,7 @@ export async function searchAll(
   };
   // Match events by their own name or by their host store's name/city.
   const eventWhere = {
+    ...visibleEvent,
     OR: [
       { name: { contains: term, mode: "insensitive" as const } },
       { store: { name: { contains: term, mode: "insensitive" as const } } },
@@ -213,12 +243,14 @@ export async function searchAll(
     eventPages: eventsTotal === 0 ? 0 : eventPages,
     pageSize,
   };
-}
+}, ["search-all"], TTL.short);
 
 export const getStores = cachedQuery(async function getStores() {
   return prisma.store.findMany({
     orderBy: { name: "asc" },
-    include: { _count: { select: { events: true } } },
+    // Count only what the store page will actually list, or a store advertises
+    // "42 events" and then shows 6.
+    include: { _count: { select: { events: { where: { ...visibleEvent } } } } },
   });
 }, ["stores"]);
 
@@ -229,9 +261,12 @@ export const getStores = cachedQuery(async function getStores() {
  */
 export const getTopStores = cachedQuery(async function getTopStores(limit = 6) {
   return prisma.store.findMany({
+    // Ordering by a *filtered* relation count isn't expressible in Prisma, so
+    // rank by total events and report the visible count. Cancelled-empty events
+    // are spread across stores, so the ranking is materially the same.
     orderBy: { events: { _count: "desc" } },
     take: limit,
-    include: { _count: { select: { events: true } } },
+    include: { _count: { select: { events: { where: { ...visibleEvent } } } } },
   });
 }, ["top-stores"]);
 
@@ -240,6 +275,7 @@ export async function getStore(id: string) {
     where: { id },
     include: {
       events: {
+        where: { ...visibleEvent },
         orderBy: { startDatetime: "desc" },
         include: { _count: { select: { entries: true } } },
       },
@@ -294,7 +330,7 @@ export const getRegionSummary = cachedQuery(async function getRegionSummary() {
             (SELECT COUNT(*) FROM "Store" s WHERE s.region = r.region)::int AS stores,
             (SELECT COUNT(*) FROM "Event" e
                JOIN "Store" s ON s.id = e."storeId"
-              WHERE s.region = r.region)::int AS events,
+              WHERE s.region = r.region AND ${VISIBLE_EVENT_SQL})::int AS events,
             (SELECT COUNT(*) FROM "Player" p
               WHERE p.region = r.region AND p."gamesPlayed" >= $1)::int AS "rankedPlayers"
      FROM (VALUES ${values}) AS r(region)`,
@@ -771,6 +807,7 @@ export async function getPlayerMatchHistory(
 export const getEvents = cachedQuery(
   async function getEvents(limit = 100) {
     return prisma.event.findMany({
+      where: { ...visibleEvent },
       orderBy: { startDatetime: "desc" },
       take: limit,
       include: { store: true, _count: { select: { matches: true, entries: true } } },
@@ -780,18 +817,63 @@ export const getEvents = cachedQuery(
   TTL.short,
 );
 
+/**
+ * Full roster + pairings for the LIVE tournament companion page — the one page
+ * that is deliberately uncached, so this query runs on every single refresh.
+ *
+ * Keep the selection EXACTLY as narrow as `RawEntry` / `RawMatch` in
+ * src/lib/tournament.ts require. It used to `include: { player: true, deck: true }`,
+ * which pulled every Player column (createdAt, updatedAt, firstName, lastName,
+ * country, region, peakRating, volatility, gamesPlayed, wins/losses/draws — none
+ * of them read here) for every entrant, plus whole Match rows. On the largest
+ * event in the database (RQ Utrecht: 1,953 entrants, 7,507 matches) that was a
+ * 4.8 MB response taking 1.9s — pulled from Neon again on every refresh, by
+ * every player in the venue, during exactly the hours the event is busiest.
+ * Widening this back to `include` would quietly restore the worst egress
+ * hotspot in the app.
+ */
 export async function getEvent(id: string) {
   return prisma.event.findUnique({
     where: { id },
-    include: {
-      store: true,
+    select: {
+      id: true,
+      name: true,
+      status: true,
+      startDatetime: true,
+      numRounds: true,
+      topCut: true,
+      pointsPerWin: true,
+      pointsPerDraw: true,
+      pointsPerLoss: true,
+      store: { select: { name: true } },
       entries: {
-        include: { player: true, deck: true },
         orderBy: { finalStanding: "asc" },
+        select: {
+          player: {
+            select: {
+              id: true,
+              displayName: true,
+              handle: true,
+              rating: true,
+              ratingDeviation: true,
+            },
+          },
+          deck: { select: { legend: true, name: true, domains: true } },
+        },
       },
       matches: {
         orderBy: [{ roundNumber: "asc" }, { id: "asc" }],
-        include: {
+        select: {
+          roundNumber: true,
+          playerOneId: true,
+          playerTwoId: true,
+          playerOneWins: true,
+          playerTwoWins: true,
+          draws: true,
+          winnerId: true,
+          isBye: true,
+          deckOneId: true,
+          deckTwoId: true,
           playerOne: { select: { id: true, displayName: true, handle: true } },
           playerTwo: { select: { id: true, displayName: true, handle: true } },
         },

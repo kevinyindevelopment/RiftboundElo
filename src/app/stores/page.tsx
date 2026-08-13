@@ -5,7 +5,7 @@ import { Card, PageTitle } from "@/components/ui";
 import { REGION_ORDER, REGION_LABELS, REGION_SUBTITLES, regionLabel } from "@/lib/regions";
 
 // See src/lib/cache.ts — `force-dynamic` would disable the query cache.
-export const revalidate = 300;
+export const revalidate = 1800;
 
 export default async function StoresPage() {
   // Takes no request-scoped input, so without this Next would prerender it at

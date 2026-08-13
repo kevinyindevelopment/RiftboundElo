@@ -1,2 +1,12 @@
-# Auto detect text files and perform LF normalization
+# Normalise line endings in the index; check out per-platform by default.
 * text=auto
+
+# Shell scripts MUST be LF even on Windows checkouts. scripts/deploy.sh runs
+# inside WSL, and with CRLF endings bash fails immediately on line 1:
+#   set: pipefail: invalid option name
+# which makes every deploy from a Windows working tree break confusingly.
+*.sh text eol=lf
+
+# Same reasoning for anything else executed by a POSIX shell / CI runner.
+*.yml text eol=lf
+*.yaml text eol=lf

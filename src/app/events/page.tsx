@@ -6,7 +6,7 @@ import { isRegion, REGION_LABELS } from "@/lib/regions";
 
 // See src/lib/cache.ts — `force-dynamic` would disable the query cache. Kept
 // short because the event list visibly moves on event days.
-export const revalidate = 120;
+export const revalidate = 600;
 
 export default async function EventsPage({
   searchParams,

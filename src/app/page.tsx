@@ -14,7 +14,7 @@ import { REGION_LABELS, REGION_SUBTITLES, type Region } from "@/lib/regions";
 // NOT `force-dynamic`: that implies `fetchCache = "force-no-store"`, which makes
 // every `unstable_cache` read a no-op (see src/lib/cache.ts), so the page would
 // re-run all its queries against Neon on every hit.
-export const revalidate = 300;
+export const revalidate = 1800;
 
 export default async function HomePage() {
   // This page reads no request-scoped input, so Next would otherwise PRERENDER

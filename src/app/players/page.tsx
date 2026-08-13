@@ -5,7 +5,7 @@ import { pct, winRate } from "@/lib/format";
 import { isRegion, REGION_LABELS } from "@/lib/regions";
 
 // See src/lib/cache.ts — `force-dynamic` would disable the query cache.
-export const revalidate = 300;
+export const revalidate = 1800;
 
 export default async function PlayersPage({
   searchParams,
