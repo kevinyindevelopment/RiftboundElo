@@ -126,7 +126,7 @@ export default async function SearchPage({
         </Card>
       ) : total === 0 ? (
         <Card className="px-6 py-10 text-center text-muted">
-          Nothing matches <span className="text-foreground">"{term}"</span>.
+          Nothing matches <span className="text-foreground">&ldquo;{term}&rdquo;</span>.
         </Card>
       ) : (
         <div className="space-y-8">

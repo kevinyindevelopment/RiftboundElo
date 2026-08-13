@@ -270,7 +270,7 @@ export default async function EventPage({
           </div>
           {team && (
             <p className="text-xs text-accent-2 mb-3">
-              {team} team event — each player's record below is their team's shared result.
+              {team} team event — each player&apos;s record below is their team&apos;s shared result.
             </p>
           )}
           {legendFilter && (

@@ -171,37 +171,6 @@ async function upsertEvent(e: V2Event) {
   });
 }
 
-/** Upsert a player using gamer tag (handle) + real name (displayName). */
-async function upsertPlayer(
-  id: string,
-  gamerTag: string | null | undefined,
-  realName: string | null | undefined,
-) {
-  const handle = gamerTag || null;
-  const displayName = realName || gamerTag || id;
-  await prisma.player.upsert({
-    where: { id },
-    create: { id, handle, displayName },
-    update: {
-      // keep the better value if we already have one
-      handle: handle ?? undefined,
-      displayName: realName ?? undefined,
-    },
-  });
-}
-
-/** Upsert a deck keyed by its Legend name. */
-async function upsertLegendDeck(name?: string | null): Promise<string | null> {
-  if (!name) return null;
-  const id = `legend:${name}`;
-  await prisma.deck.upsert({
-    where: { id },
-    create: { id, name, legend: name, archetype: name },
-    update: {},
-  });
-  return id;
-}
-
 function winnerId(m: V2Match): number | null {
   const w = m.winning_player;
   if (w == null) return null;
@@ -772,7 +741,7 @@ async function ingestPremierEvents(opts: {
 
   const seen = new Set<number>();
   const toFetch: number[] = [];
-  let listed = 0, premier = 0;
+  let premier = 0;
 
   for (const status of STATUSES) {
     const isUpcoming = /upcoming/i.test(status);
@@ -810,7 +779,6 @@ async function ingestPremierEvents(opts: {
 
       for (const e of bigOnPage) {
         seen.add(e.id);
-        listed++;
         premier++;
         if (e.store) await upsertStore(e.store);
         await upsertEvent(e);

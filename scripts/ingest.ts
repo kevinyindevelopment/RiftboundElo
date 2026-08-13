@@ -164,41 +164,62 @@ function asArray(x: unknown): unknown[] {
   return [];
 }
 
+/**
+ * carde payloads are untrusted and their shape varies by endpoint, so navigate
+ * them through these guards rather than casting to `any` (which silently
+ * disabled type-checking on every access below).
+ */
+type Json = unknown;
+const asObj = (v: Json): Record<string, Json> | null =>
+  v !== null && typeof v === "object" && !Array.isArray(v)
+    ? (v as Record<string, Json>)
+    : null;
+/** `v[key]`, or undefined when `v` isn't an object. Mirrors `v?.key`. */
+const prop = (v: Json, key: string): Json => asObj(v)?.[key];
+/** `v[i]`, or undefined when `v` isn't an array. Mirrors `v?.[i]`. */
+const at = (v: Json, i: number): Json => (Array.isArray(v) ? v[i] : undefined);
+
 function participant(p: unknown): { id: string; name: string } | null {
-  if (!p || typeof p !== "object") return null;
-  const o = p as Record<string, any>;
+  const o = asObj(p);
+  if (!o) return null;
   // common nests: { user: {...} }, { user_event_status: { user: {...} } }, direct user
-  const u = o.user ?? o.user_event_status?.user ?? o.player ?? o;
-  const id = u?.id ?? o.user_id ?? o.player_id;
+  const u = prop(o, "user") ?? prop(prop(o, "user_event_status"), "user") ?? prop(o, "player") ?? o;
+  const id = prop(u, "id") ?? prop(o, "user_id") ?? prop(o, "player_id");
   if (id == null) return null;
+  // `[a,b].filter(Boolean).join(" ")` returns "" rather than null when both are
+  // missing, and "" is not nullish — so a bare `??` chain stopped there and the
+  // display_name/username fallbacks below were unreachable. Coerce "" to
+  // undefined so they are actually tried.
+  const full = [prop(u, "first_name"), prop(u, "last_name")].filter(Boolean).join(" ");
   const name =
-    u?.best_identifier ??
-    [u?.first_name, u?.last_name].filter(Boolean).join(" ") ??
-    u?.display_name ??
-    u?.username ??
+    prop(u, "best_identifier") ??
+    (full || undefined) ??
+    prop(u, "display_name") ??
+    prop(u, "username") ??
     String(id);
   return { id: String(id), name: String(name || id) };
 }
 
 function parseMatch(raw: unknown, roundNumber: number | null): ParsedMatch | null {
-  if (!raw || typeof raw !== "object") return null;
-  const m = raw as Record<string, any>;
+  const m = asObj(raw);
+  if (!m) return null;
+  const parts = prop(m, "participants");
   const p1 = participant(
-    m.player_one ?? m.user_one ?? m.user_event_status_one ?? m.participants?.[0],
+    prop(m, "player_one") ?? prop(m, "user_one") ?? prop(m, "user_event_status_one") ?? at(parts, 0),
   );
   const p2 = participant(
-    m.player_two ?? m.user_two ?? m.user_event_status_two ?? m.participants?.[1],
+    prop(m, "player_two") ?? prop(m, "user_two") ?? prop(m, "user_event_status_two") ?? at(parts, 1),
   );
   if (!p1) return null;
-  const p1Wins = Number(m.player_one_wins ?? m.user_one_wins ?? m.wins_one ?? 0);
-  const p2Wins = Number(m.player_two_wins ?? m.user_two_wins ?? m.wins_two ?? 0);
+  const p1Wins = Number(prop(m, "player_one_wins") ?? prop(m, "user_one_wins") ?? prop(m, "wins_one") ?? 0);
+  const p2Wins = Number(prop(m, "player_two_wins") ?? prop(m, "user_two_wins") ?? prop(m, "wins_two") ?? 0);
   let winnerId: string | null = null;
-  const w = m.winner ?? m.winner_id ?? m.winning_user_id;
-  if (w != null && typeof w === "object") winnerId = String((w as any).id);
+  const w = prop(m, "winner") ?? prop(m, "winner_id") ?? prop(m, "winning_user_id");
+  if (w != null && typeof w === "object") winnerId = String(prop(w, "id"));
   else if (w != null) winnerId = String(w);
   else if (p2) winnerId = p1Wins > p2Wins ? p1.id : p1Wins < p2Wins ? p2.id : null;
   return {
-    id: String(m.id ?? `${roundNumber}-${p1.id}-${p2?.id ?? "bye"}`),
+    id: String(prop(m, "id") ?? `${roundNumber}-${p1.id}-${p2?.id ?? "bye"}`),
     roundNumber,
     p1,
     p2,
@@ -212,9 +233,8 @@ function parseRounds(payload: unknown): ParsedMatch[] {
   const rounds = asArray(payload);
   const out: ParsedMatch[] = [];
   rounds.forEach((r, idx) => {
-    const ro = r as Record<string, any>;
-    const roundNumber = Number(ro?.round_number ?? ro?.number ?? idx + 1);
-    const matches = asArray(ro?.matches ?? ro?.pairings ?? r);
+    const roundNumber = Number(prop(r, "round_number") ?? prop(r, "number") ?? idx + 1);
+    const matches = asArray(prop(r, "matches") ?? prop(r, "pairings") ?? r);
     for (const m of matches) {
       const pm = parseMatch(m, Number.isNaN(roundNumber) ? null : roundNumber);
       if (pm) out.push(pm);

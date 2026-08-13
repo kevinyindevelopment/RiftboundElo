@@ -43,14 +43,18 @@ function cost(cents?: number | null, currency?: string | null): string {
 export function EventList({ events }: { events: EventLike[] }) {
   if (events.length === 0)
     return <Card className="px-6 py-8 text-center text-muted">No events.</Card>;
-  const nowMs = Date.now();
   return (
     <Card className="divide-y divide-border/60">
       {events.map((e) => {
         // Upcoming events show the start time; past events just the date.
-        const upcoming =
-          e.status?.toLowerCase() === "upcoming" ||
-          (e.startDatetime != null && new Date(e.startDatetime).getTime() > nowMs);
+        //
+        // This used to also compare against a render-time `Date.now()`, which is
+        // both impure during render (react-hooks/purity) and wrong once pages
+        // are ISR-cached: the timestamp would be frozen into the cached HTML for
+        // the whole revalidation window. The status check stays here, and the
+        // date comparison moves into LocalTime's "auto" mode, where it runs
+        // against the VIEWER's clock. See components/local-time.tsx.
+        const upcoming = e.status?.toLowerCase() === "upcoming";
         return (
         <Link
           key={e.id}
@@ -76,11 +80,14 @@ export function EventList({ events }: { events: EventLike[] }) {
               <span className="text-muted"> players</span>
             </div>
             <div className="text-xs text-muted">
-              {upcoming && e.startDatetime ? (
+              {e.startDatetime ? (
                 <LocalTime
                   ms={new Date(e.startDatetime).getTime()}
-                  fallback={fmtDateTime(e.startDatetime)}
-                  withTime
+                  // SSR/hydration text. "auto" resolves to date+time client-side
+                  // for future events, so the fallback matches for known-upcoming
+                  // ones and stays date-only otherwise.
+                  fallback={upcoming ? fmtDateTime(e.startDatetime) : fmtDate(e.startDatetime)}
+                  withTime={upcoming ? true : "auto"}
                 />
               ) : (
                 fmtDate(e.startDatetime)

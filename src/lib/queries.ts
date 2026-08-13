@@ -1087,7 +1087,6 @@ export const getMetagame = cachedQuery(async function getMetagame(set?: SetCode)
     LEFT JOIN "Store" s ON s.id = e."storeId"
     WHERE m."isBye" = false AND m."${deckCol}" IS NOT NULL`;
 
-  const matchFilter = set ? `WHERE setcode = $1 AND dated` : "";
   const matchSql = `
     WITH sides AS (
       ${side("deckOneId", "playerOneId")}

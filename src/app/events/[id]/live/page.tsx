@@ -30,6 +30,49 @@ import { fmtDate } from "@/lib/format";
 // silently disable getEvent's cache entirely. See src/lib/cache.ts and COST.md.
 export const revalidate = 30;
 
+/** Prev/next pager shared by the standings and pairings tables. */
+function LivePager({
+  page,
+  pages,
+  from,
+  to,
+  total,
+  href,
+}: {
+  page: number;
+  pages: number;
+  from: number;
+  to: number;
+  total: number;
+  href: (page: number) => string;
+}) {
+  if (pages <= 1) return null;
+  const on = "px-2.5 py-1 rounded-md border border-border hover:bg-surface-2/60";
+  const off = "px-2.5 py-1 rounded-md border border-border/50 text-muted/50";
+  return (
+    <div className="flex items-center justify-between gap-3 mt-3 text-sm">
+      <span className="text-muted tabular-nums">
+        {from}–{to} of {total}
+      </span>
+      <div className="flex items-center gap-2">
+        {page > 1 ? (
+          <Link href={href(page - 1)} className={on}>← Prev</Link>
+        ) : (
+          <span className={off}>← Prev</span>
+        )}
+        <span className="text-muted tabular-nums">
+          {page} / {pages}
+        </span>
+        {page < pages ? (
+          <Link href={href(page + 1)} className={on}>Next →</Link>
+        ) : (
+          <span className={off}>Next →</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /** A match counts toward standings only once it has a real result. */
 function isDecided(m: RawMatch): boolean {
   return m.isBye || m.winnerId != null || m.playerOneWins > 0 || m.playerTwoWins > 0 || m.draws > 0;
@@ -38,12 +81,16 @@ function isDecided(m: RawMatch): boolean {
 /**
  * Rows of standings rendered per page.
  *
- * This exists for a hard platform reason, not taste. Server-rendering the whole
- * field of a large Regional (RQ Utrecht: 1,953 entrants) produced ~3.5 MB of
- * HTML and overran the Cloudflare Worker CPU budget, so the page returned
- * intermittent 503s (`outcome: exceededCpu`, error 1102) on exactly the biggest
- * events. The account is on the Workers Free plan, where the CPU ceiling cannot
- * be raised, so the render has to be bounded instead.
+ * Server-rendering the whole field of a large Regional (RQ Utrecht: 1,953
+ * entrants) produced ~3.5 MB of HTML; bounding it cut that to ~390 kB and made
+ * each render far cheaper.
+ *
+ * To be clear about what this does NOT fix: the intermittent 503s on this page
+ * (`outcome: exceededCpu`, error 1102) come from the Workers **Free** plan's
+ * 10 ms CPU ceiling, which applies to every SSR render regardless of size — an
+ * event with 1 entrant fails just as readily. See COST.md. Pagination reduces
+ * the work per render and is worth keeping, but only the Workers Paid plan
+ * actually removes that failure mode.
  *
  * Standings are still COMPUTED over the entire field — ranks, OMW/OGW and cut
  * status are all field-wide and correct — only the slice that is rendered is
@@ -51,15 +98,27 @@ function isDecided(m: RawMatch): boolean {
  */
 const LIVE_STANDINGS_PAGE = 100;
 
+/**
+ * Pending pairings rendered per page. Same CPU reasoning as the standings.
+ *
+ * The largest pending round anywhere in the database today is 125, so this
+ * threshold changes nothing for any existing event — no pager appears. It is a
+ * bound for the case the page actually exists to serve: a live Regional
+ * mid-round. Utrecht had 1,953 entrants, which is ~976 simultaneous pairings,
+ * and that is exactly the situation where an unbounded render would trip the
+ * Worker CPU limit again.
+ */
+const LIVE_PAIRINGS_PAGE = 150;
+
 export default async function LiveEventPage({
   params,
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ sp?: string }>;
+  searchParams: Promise<{ sp?: string; pp?: string }>;
 }) {
   const { id } = await params;
-  const { sp } = await searchParams;
+  const { sp, pp } = await searchParams;
   const event = await getEvent(id);
   if (!event) notFound();
 
@@ -157,6 +216,30 @@ export default async function LiveEventPage({
     .filter((p): p is PendingPairing => p !== null)
     .sort((a, b) => b.one.points + b.two.points - (a.one.points + a.two.points));
 
+  const pairingPages = Math.max(1, Math.ceil(pending.length / LIVE_PAIRINGS_PAGE));
+  const ppNum = Number(pp);
+  const pairingPage = Math.min(
+    Math.max(1, Number.isFinite(ppNum) && ppNum >= 1 ? Math.floor(ppNum) : 1),
+    pairingPages,
+  );
+  const pairingFrom = (pairingPage - 1) * LIVE_PAIRINGS_PAGE + 1;
+  const pendingShown = pending.slice(
+    pairingFrom - 1,
+    pairingFrom - 1 + LIVE_PAIRINGS_PAGE,
+  );
+  const pairingTo = pairingFrom - 1 + pendingShown.length;
+
+  /** Link back to this page, keeping whichever pager the user isn't moving. */
+  const liveHref = (next: { sp?: number; pp?: number }) => {
+    const q = new URLSearchParams();
+    const s = next.sp ?? standingsPage;
+    const p = next.pp ?? pairingPage;
+    if (s > 1) q.set("sp", String(s));
+    if (p > 1) q.set("pp", String(p));
+    const qs = q.toString();
+    return `/events/${event.id}/live${qs ? `?${qs}` : ""}`;
+  };
+
   const hasData = standings.length > 0 || pending.length > 0;
 
   return (
@@ -219,7 +302,15 @@ export default async function LiveEventPage({
                 </h2>
                 <span className="text-xs text-muted">{pending.length} pairings</span>
               </div>
-              <PendingPairings pairings={pending} />
+              <PendingPairings pairings={pendingShown} />
+              <LivePager
+                page={pairingPage}
+                pages={pairingPages}
+                from={pairingFrom}
+                to={pairingTo}
+                total={pending.length}
+                href={(n) => liveHref({ pp: n })}
+              />
               <p className="text-[11px] text-muted mt-3">
                 Odds from each player&apos;s Glicko rating — a guide, not a verdict.
               </p>
@@ -245,42 +336,14 @@ export default async function LiveEventPage({
                   bubble={bubble}
                   odds={odds}
                 />
-                {standingsPages > 1 && (
-                  <div className="flex items-center justify-between gap-3 mt-3 text-sm">
-                    <span className="text-muted tabular-nums">
-                      {standingsFrom}–{standingsTo} of {standings.length}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      {standingsPage > 1 ? (
-                        <Link
-                          href={`/events/${event.id}/live?sp=${standingsPage - 1}`}
-                          className="px-2.5 py-1 rounded-md border border-border hover:bg-surface-2/60"
-                        >
-                          ← Prev
-                        </Link>
-                      ) : (
-                        <span className="px-2.5 py-1 rounded-md border border-border/50 text-muted/50">
-                          ← Prev
-                        </span>
-                      )}
-                      <span className="text-muted tabular-nums">
-                        {standingsPage} / {standingsPages}
-                      </span>
-                      {standingsPage < standingsPages ? (
-                        <Link
-                          href={`/events/${event.id}/live?sp=${standingsPage + 1}`}
-                          className="px-2.5 py-1 rounded-md border border-border hover:bg-surface-2/60"
-                        >
-                          Next →
-                        </Link>
-                      ) : (
-                        <span className="px-2.5 py-1 rounded-md border border-border/50 text-muted/50">
-                          Next →
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                )}
+                <LivePager
+                  page={standingsPage}
+                  pages={standingsPages}
+                  from={standingsFrom}
+                  to={standingsTo}
+                  total={standings.length}
+                  href={(n) => liveHref({ sp: n })}
+                />
               </>
             )}
             {odds && (

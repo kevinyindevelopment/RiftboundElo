@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getStore } from "@/lib/queries";
-import { PageTitle } from "@/components/ui";
 import { EventList } from "@/components/events";
 import { RegionBadge } from "@/components/region-tabs";
 

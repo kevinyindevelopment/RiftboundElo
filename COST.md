@@ -92,6 +92,42 @@ costs storage *and* restore *and* compute.
 If this line item ever looks large, **shortening the restore window in the Neon
 dashboard is the direct fix** and needs no code change.
 
+## Cloudflare Workers: the Free plan's 10 ms CPU limit
+
+The Worker runs on the **Workers Free** plan, which allows **10 ms of CPU per
+invocation** and does not let you raise it. Adding `limits.cpu_ms` to
+`wrangler.jsonc` is rejected by the API (`code 100328`) and **fails the entire
+deploy** — don't.
+
+Server-rendering any real page costs far more than 10 ms, so invocations that
+actually render are sometimes killed with `outcome: exceededCpu`, surfacing as
+**HTTP 503, Cloudflare error 1102**. Enforcement is bursty rather than absolute:
+renders costing 500–800 ms of CPU frequently succeed, while others are cut off
+at exactly `cpuTime = 10`. Measured across pages, roughly **10–15% of
+cache-missing requests fail this way**, and it is NOT size-dependent — an event
+with 1 entrant and 0 matches fails just as readily as a 1,953-player Regional,
+and `/rankings` fails too.
+
+What follows from this:
+
+- **Caching is the mitigation, and it is why the caching matters twice over.**
+  A cache HIT serves stored HTML for almost no CPU. Only cache misses and ISR
+  revalidations do a full render, so longer TTLs mean fewer exposed renders and
+  proportionally fewer 503s. Before any caching existed, *every* request was a
+  full render.
+- **Short TTLs trade reliability for freshness here.** `/events/[id]/live` at 30s
+  revalidates often and is therefore the most exposed page. That is a deliberate
+  choice for tournament-day freshness, not an oversight.
+- **Cutting per-render work does not fix it.** No amount of optimisation gets an
+  SSR render under 10 ms. It reduces the odds of being cut off; it cannot
+  eliminate them.
+
+**The actual fix is the Workers Paid plan (~$5/month)**, which raises the default
+CPU ceiling to 30s and makes `limits.cpu_ms` settable. Against a Neon Launch bill
+this is small, and it removes a site-wide class of intermittent 503s that no code
+change can. Treat it as the first thing to buy if reliability matters more than
+the last few dollars.
+
 ## Checklist for a change that touches the database
 
 1. Does it change how often Neon is **woken**? That dominates. Fewer wakes wins.

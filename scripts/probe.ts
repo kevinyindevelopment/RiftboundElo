@@ -18,13 +18,39 @@ const BASE =
 const SCHEME = (process.env.CARDE_AUTH_SCHEME ?? "Token").trim(); // or "Bearer"
 const token = process.env.CARDE_TOKEN?.trim();
 
+/**
+ * A decoded JSON value of unknown shape. This is a shape-discovery tool pointed
+ * at an API whose payloads vary between endpoints, so the response really is
+ * unknown — `unknown` says that honestly, where `any` silently disabled every
+ * check below.
+ */
+type Json = unknown;
+
+/** Narrow a JSON value to an indexable object, or null. */
+function asObj(v: Json): Record<string, Json> | null {
+  return v !== null && typeof v === "object" && !Array.isArray(v)
+    ? (v as Record<string, Json>)
+    : null;
+}
+
+/** Read `key` off a JSON value, or undefined if it isn't an object. */
+function prop(v: Json, key: string): Json {
+  return asObj(v)?.[key];
+}
+
+/** Length of `v[key]` when it is an array, else 0. */
+function arrayLen(v: Json, key: string): number {
+  const a = prop(v, key);
+  return Array.isArray(a) ? a.length : 0;
+}
+
 async function hit(path: string) {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (token) headers.Authorization = `${SCHEME} ${token}`;
   try {
     const res = await fetch(`${BASE}${path}`, { headers });
     const text = await res.text();
-    let json: any;
+    let json: Json;
     try {
       json = JSON.parse(text);
     } catch {
@@ -32,18 +58,18 @@ async function hit(path: string) {
     }
     return { status: res.status, size: text.length, json };
   } catch (e) {
-    return { status: -1, size: 0, json: { error: String(e) } };
+    return { status: -1, size: 0, json: { error: String(e) } as Json };
   }
 }
 
-function summarizeRounds(json: any): string {
+function summarizeRounds(json: Json): string {
   if (!json) return "no json";
   const arr = Array.isArray(json)
     ? json
-    : json.results ?? json.rounds ?? json.data ?? [];
+    : prop(json, "results") ?? prop(json, "rounds") ?? prop(json, "data") ?? [];
   if (!Array.isArray(arr)) return "non-array";
   const matches = arr.reduce(
-    (n: number, r: any) => n + (r?.matches?.length ?? r?.pairings?.length ?? 0),
+    (n: number, r: Json) => n + (arrayLen(r, "matches") || arrayLen(r, "pairings")),
     0,
   );
   return `${arr.length} round(s), ${matches} match-ish entries`;
@@ -53,8 +79,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function probe(id: number) {
   const ev = await hit(`/api/magic-events/${id}/`);
-  const name = ev.json?.name ?? "(404)";
-  const players = ev.json?.registered_user_count ?? "?";
+  const name = prop(ev.json, "name") ?? "(404)";
+  const players = prop(ev.json, "registered_user_count") ?? "?";
   console.log(`\n● event ${id}  [${ev.status}]  "${name}"  players=${players}`);
   if (ev.status !== 200) return;
 
@@ -70,7 +96,7 @@ async function probe(id: number) {
     if (r.status === 200) {
       note =
         label === "get_all_rounds" ? `  → ${summarizeRounds(r.json)}` : `  → ${r.size}B`;
-    } else if (r.json?.error) {
+    } else if (prop(r.json, "error")) {
       note = `  (${JSON.stringify(r.json).slice(0, 80)})`;
     }
     console.log(`    ${label.padEnd(26)} [${r.status}] ${r.size}B${note}`);
