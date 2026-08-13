@@ -5,7 +5,26 @@ Optimise against the price list below, not against instinct. Several "obvious"
 optimisations are worth approximately nothing here, and the thing that actually
 costs money is not the thing that took the site down.
 
-## The plan we are on
+## There are TWO separate bills — don't conflate them
+
+| Vendor | What it is | Plan |
+|---|---|---|
+| **Neon** | the Postgres database | **Launch (paid)** |
+| **Cloudflare Workers** | the hosting that runs the site | **Free** |
+
+They are unrelated accounts, and each has produced its own outage:
+
+- **Neon** refused every query with **HTTP 402** ("exceeded the data transfer
+  quota") when the recompute was pulling whole tables. Fixed by the Launch
+  upgrade *and* by the egress work below.
+- **Cloudflare** kills renders with **HTTP 503 / `exceededCpu`** because of the
+  Free plan's 10 ms CPU cap. Upgrading Neon did nothing for this, and nothing in
+  the database section below applies to it. See the Workers section.
+
+When a limit bites, identify which vendor it came from before reasoning about
+it — the fixes have nothing in common.
+
+## The database plan
 
 **Neon — Launch**
 
