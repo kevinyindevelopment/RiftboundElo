@@ -19,6 +19,11 @@
 # scratch / ad-hoc debug files
 .scratch_*
 
+# Claude Code per-machine settings: contains absolute temp paths from whichever
+# machine ran the session, so it is local-only. .claude/settings.json (shared,
+# checked-in project config) is deliberately NOT ignored.
+.claude/settings.local.json
+
 # next.js
 /.next/
 /out/
