@@ -43,10 +43,25 @@ import { unstable_cache } from "next/cache";
  * 2-minute TTL buys no freshness anybody can perceive while costing up to 15x
  * the wakes of a 30-minute one.
  *
- * The floor that matters is 5 minutes: a TTL below that guarantees Neon can
- * never suspend under steady traffic. Nothing here is below it.
+ * The floor that matters is 5 minutes: a TTL below that means Neon cannot
+ * suspend while that page is being trafficked. Only the two tournament-day
+ * tiers sit below it, deliberately — see their notes.
  */
 export const TTL = {
+  /**
+   * Live tournament standings. BELOW the 5-minute suspend floor on purpose.
+   *
+   * This looks like it violates the rule above, and the reasoning matters: the
+   * live page is only trafficked *during* an event, when the ingest is running
+   * anyway and Neon is awake regardless — so the wakes are not additional. What
+   * it does remove is the per-refresh database hit from every player in the
+   * venue reloading between rounds, which is ~60x fewer queries for staleness
+   * nobody can perceive (rounds run ~50 minutes). Outside events nothing
+   * requests this page, so it costs nothing at all.
+   */
+  live: 30,
+  /** Event detail: standings/pairings pages, refreshed on the day. */
+  event: 60,
   /** Listings that move when new events are ingested. Still >> the 3h cadence. */
   short: 600, // 10 min
   /** Default for dashboards, ladders and listings. */

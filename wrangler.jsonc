@@ -10,6 +10,11 @@
 		"directory": ".open-next/assets",
 		"binding": "ASSETS"
 	},
+	// NOTE: do NOT add a `limits.cpu_ms` block — this account is on the Workers
+	// Free plan and the API rejects it outright ("CPU limits are not supported
+	// for the Free plan", code 100328), failing the whole deploy. The live
+	// tournament page's CPU cost is managed in code instead: standings are
+	// paginated and the Monte-Carlo sim count scales with field size.
 	// Incremental cache store for ISR pages + `unstable_cache` query results.
 	// The binding NAME is fixed by the OpenNext adapter — it looks up exactly
 	// `NEXT_INC_CACHE_KV` (see open-next.config.ts). Without this the app falls

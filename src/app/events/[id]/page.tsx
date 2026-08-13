@@ -82,10 +82,10 @@ function Pager({
   );
 }
 
-// DELIBERATELY still force-dynamic: standings and pairings update round by round
-// during an event, and this is the page people check on the day. Its queries are
-// per-event and long-tail, so it is not a meaningful share of database load.
-export const dynamic = "force-dynamic";
+// Standings and pairings update round by round, and this is the page people
+// check on the day — so 60s, not the site-wide default. Must not be
+// `force-dynamic`: that would disable the query caches below. See COST.md.
+export const revalidate = 60;
 
 export default async function EventPage({
   params,

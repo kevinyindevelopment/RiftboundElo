@@ -818,8 +818,11 @@ export const getEvents = cachedQuery(
 );
 
 /**
- * Full roster + pairings for the LIVE tournament companion page — the one page
- * that is deliberately uncached, so this query runs on every single refresh.
+ * Full roster + pairings for the LIVE tournament companion page.
+ *
+ * Cached for only 30s (TTL.live): long enough that a venue full of players
+ * refreshing between rounds costs ~one query instead of hundreds, short enough
+ * that nobody perceives it — rounds run ~50 minutes.
  *
  * Keep the selection EXACTLY as narrow as `RawEntry` / `RawMatch` in
  * src/lib/tournament.ts require. It used to `include: { player: true, deck: true }`,
@@ -832,7 +835,7 @@ export const getEvents = cachedQuery(
  * Widening this back to `include` would quietly restore the worst egress
  * hotspot in the app.
  */
-export async function getEvent(id: string) {
+export const getEvent = cachedQuery(async function getEvent(id: string) {
   return prisma.event.findUnique({
     where: { id },
     select: {
@@ -880,10 +883,10 @@ export async function getEvent(id: string) {
       },
     },
   });
-}
+}, ["event-live"], TTL.live);
 
 /** Lightweight event header: metadata + store + counts (no row payloads). */
-export async function getEventSummary(id: string) {
+export const getEventSummary = cachedQuery(async function getEventSummary(id: string) {
   const [event, standingsCount] = await Promise.all([
     prisma.event.findUnique({
       where: { id },
@@ -893,14 +896,14 @@ export async function getEventSummary(id: string) {
   ]);
   if (!event) return null;
   return { ...event, hasStandings: standingsCount > 0 };
-}
+}, ["event-summary"], TTL.event);
 
 export const EVENT_STANDINGS_PAGE = 100;
 export const EVENT_ROUNDS_PAGE = 150;
 
 /** Paginated standings/roster for an event (heavy on 1000+ player events).
  *  `legend` filters to entries whose deck piloted that Legend. */
-export async function getEventStandings(
+export const getEventStandings = cachedQuery(async function getEventStandings(
   id: string,
   { page = 1, pageSize = EVENT_STANDINGS_PAGE, legend }: { page?: number; pageSize?: number; legend?: string } = {},
 ) {
@@ -924,10 +927,10 @@ export async function getEventStandings(
     },
   });
   return { entries, total, page: p, pages, pageSize, offset: (p - 1) * pageSize };
-}
+}, ["event-standings"], TTL.event);
 
 /** Paginated pairings for an event; Legend per side derived from deck ids. */
-export async function getEventRounds(
+export const getEventRounds = cachedQuery(async function getEventRounds(
   id: string,
   { page = 1, pageSize = EVENT_ROUNDS_PAGE } = {},
 ) {
@@ -951,7 +954,7 @@ export async function getEventRounds(
     twoLegend: legendOf(m.deckTwoId),
   }));
   return { matches: rows, total, page: p, pages, pageSize };
-}
+}, ["event-rounds"], TTL.event);
 
 export type EventDeckStat = {
   legend: string;
@@ -969,10 +972,9 @@ export type EventDeckStat = {
  * record at THIS event (not just who registered it). Returns [] when the event
  * has no deck data.
  */
-export async function getEventMetagame(eventId: string): Promise<{
-  stats: EventDeckStat[];
-  totalPlayers: number;
-}> {
+export const getEventMetagame = cachedQuery(async function getEventMetagame(
+  eventId: string,
+): Promise<{ stats: EventDeckStat[]; totalPlayers: number }> {
   // Aggregate in SQL (scoped to this event) so a big RQ doesn't stream ~7k
   // match rows into memory. Legend + domains come from the deck; play counts +
   // best finish from entries; win/loss/draw from per-match deck ids.
@@ -1036,7 +1038,7 @@ export async function getEventMetagame(eventId: string): Promise<{
   );
   const totalPlayers = stats.reduce((s, a) => s + a.players, 0);
   return { stats, totalPlayers };
-}
+}, ["event-metagame"], TTL.event);
 
 /**
  * Metagame: aggregate by Legend across event entries, with win rates. When

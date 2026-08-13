@@ -15,9 +15,15 @@ name: Update ratings
 
 on:
   schedule:
-    # Every 3 hours (UTC). Fresh within hours during weekend/evening events;
-    # cheap on quiet weekday hours because unchanged events are skipped and the
-    # recompute only runs when new matches actually landed.
+    # Every 6 hours (UTC). Unchanged events are skipped and the recompute only
+    # runs when new matches actually landed, so quiet hours are cheap.
+    #
+    # Why 6 and not 3: Neon bills compute by AWAKE-TIME and suspends after 5
+    # minutes idle, so every scheduled run costs its own duration PLUS the
+    # 5-minute idle countdown. That makes the schedule a fixed cost floor
+    # independent of how efficient the queries are — halving it halves the
+    # floor. Local events cluster on evenings and weekends, so 6h loses very
+    # little freshness. See COST.md.
     #
     # ⚠️ COST NOTE. This schedule once exhausted Neon's monthly data-transfer
     # quota in a few days, which took the live site down hard: Neon began
@@ -28,10 +34,7 @@ on:
     #
     # That is fixed — recompute now pulls ~22 MB and diffs inside Postgres via
     # ON CONFLICT ... WHERE IS DISTINCT FROM (verified: byte-identical output).
-    # If transfer ever becomes tight again, HALVING THIS SCHEDULE is the
-    # cheapest lever: local events cluster on evenings/weekends, so "0 */6"
-    # loses very little freshness.
-    - cron: "0 */3 * * *"
+    - cron: "0 */6 * * *"
   # Allow manual runs from the Actions tab (useful for testing / on-demand).
   workflow_dispatch:
 

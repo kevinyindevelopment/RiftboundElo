@@ -6,6 +6,7 @@ import {
   bubbleAnalysis,
   computeStandings,
   legendRaces,
+  simCountFor,
   simulateTopCut,
   type RawEntry,
   type RawMatch,
@@ -22,24 +23,43 @@ import {
 } from "@/components/tournament";
 import { fmtDate } from "@/lib/format";
 
-// DELIBERATELY still force-dynamic. This is the in-venue tournament companion —
-// players refresh it between rounds for live pairings and standings, so serving
-// a cached copy would be actively wrong. Note this also disables `unstable_cache`
-// for anything this page calls (see src/lib/cache.ts), which is exactly what we
-// want here: `getEvent` must always hit the database.
-export const dynamic = "force-dynamic";
+// The in-venue tournament companion: players refresh it between rounds. 30s is
+// imperceptible here (rounds run ~50 minutes) but collapses a venue full of
+// simultaneous refreshes into roughly one database read. It must NOT be
+// `force-dynamic` — that implies fetchCache="force-no-store", which would
+// silently disable getEvent's cache entirely. See src/lib/cache.ts and COST.md.
+export const revalidate = 30;
 
 /** A match counts toward standings only once it has a real result. */
 function isDecided(m: RawMatch): boolean {
   return m.isBye || m.winnerId != null || m.playerOneWins > 0 || m.playerTwoWins > 0 || m.draws > 0;
 }
 
+/**
+ * Rows of standings rendered per page.
+ *
+ * This exists for a hard platform reason, not taste. Server-rendering the whole
+ * field of a large Regional (RQ Utrecht: 1,953 entrants) produced ~3.5 MB of
+ * HTML and overran the Cloudflare Worker CPU budget, so the page returned
+ * intermittent 503s (`outcome: exceededCpu`, error 1102) on exactly the biggest
+ * events. The account is on the Workers Free plan, where the CPU ceiling cannot
+ * be raised, so the render has to be bounded instead.
+ *
+ * Standings are still COMPUTED over the entire field — ranks, OMW/OGW and cut
+ * status are all field-wide and correct — only the slice that is rendered is
+ * limited. Matches the pagination /events/[id] already uses.
+ */
+const LIVE_STANDINGS_PAGE = 100;
+
 export default async function LiveEventPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ sp?: string }>;
 }) {
   const { id } = await params;
+  const { sp } = await searchParams;
   const event = await getEvent(id);
   if (!event) notFound();
 
@@ -63,8 +83,26 @@ export default async function LiveEventPage({
   }));
 
   const decided = matches.filter(isDecided);
+  // Computed over the WHOLE field: ranks, OMW/OGW and cut status are field-wide.
+  // Only the rendered slice below is bounded (see LIVE_STANDINGS_PAGE).
   const standings = computeStandings(decided, entries, scoring);
   const byId = new Map<string, Standing>(standings.map((s) => [s.playerId, s]));
+
+  const standingsPages = Math.max(
+    1,
+    Math.ceil(standings.length / LIVE_STANDINGS_PAGE),
+  );
+  const spNum = Number(sp);
+  const standingsPage = Math.min(
+    Math.max(1, Number.isFinite(spNum) && spNum >= 1 ? Math.floor(spNum) : 1),
+    standingsPages,
+  );
+  const standingsFrom = (standingsPage - 1) * LIVE_STANDINGS_PAGE + 1;
+  const standingsShown = standings.slice(
+    standingsFrom - 1,
+    standingsFrom - 1 + LIVE_STANDINGS_PAGE,
+  );
+  const standingsTo = standingsFrom - 1 + standingsShown.length;
 
   // Rounds already in the books = highest round with a decided result. A freshly
   // posted, all-pending round doesn't count yet — those are the next round's odds.
@@ -201,13 +239,57 @@ export default async function LiveEventPage({
             {standings.length === 0 ? (
               <p className="text-muted text-sm">No results recorded yet.</p>
             ) : (
-              <StandingsTable standings={standings} bubble={bubble} odds={odds} />
+              <>
+                <StandingsTable
+                  standings={standingsShown}
+                  bubble={bubble}
+                  odds={odds}
+                />
+                {standingsPages > 1 && (
+                  <div className="flex items-center justify-between gap-3 mt-3 text-sm">
+                    <span className="text-muted tabular-nums">
+                      {standingsFrom}–{standingsTo} of {standings.length}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      {standingsPage > 1 ? (
+                        <Link
+                          href={`/events/${event.id}/live?sp=${standingsPage - 1}`}
+                          className="px-2.5 py-1 rounded-md border border-border hover:bg-surface-2/60"
+                        >
+                          ← Prev
+                        </Link>
+                      ) : (
+                        <span className="px-2.5 py-1 rounded-md border border-border/50 text-muted/50">
+                          ← Prev
+                        </span>
+                      )}
+                      <span className="text-muted tabular-nums">
+                        {standingsPage} / {standingsPages}
+                      </span>
+                      {standingsPage < standingsPages ? (
+                        <Link
+                          href={`/events/${event.id}/live?sp=${standingsPage + 1}`}
+                          className="px-2.5 py-1 rounded-md border border-border hover:bg-surface-2/60"
+                        >
+                          Next →
+                        </Link>
+                      ) : (
+                        <span className="px-2.5 py-1 rounded-md border border-border/50 text-muted/50">
+                          Next →
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </>
             )}
             {odds && (
               <p className="text-[11px] text-muted mt-3">
-                Odds = estimated Top {topCut} chance from 1,500 simulated finishes
-                of the remaining {roundsLeft} round{roundsLeft === 1 ? "" : "s"}. Cut
-                status is provable; odds are an estimate.
+                Odds = estimated Top {topCut} chance from{" "}
+                {simCountFor(standings.length, roundsLeft ?? 0).toLocaleString()}{" "}
+                simulated finishes of the remaining {roundsLeft} round
+                {roundsLeft === 1 ? "" : "s"}. Cut status is provable; odds are an
+                estimate.
               </p>
             )}
           </Card>

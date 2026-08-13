@@ -371,19 +371,50 @@ export function legendRaces(standings: Standing[]): LegendRace[] {
   return races;
 }
 
+/** Upper bound on simulations, used for small fields where it is cheap. */
+const MAX_SIMS = 1500;
+/** Never drop below this — fewer than ~120 runs makes the odds visibly jittery. */
+const MIN_SIMS = 120;
+/**
+ * Rough comparison budget for a whole `simulateTopCut` call. Each simulated
+ * round sorts the field, so the cost is ~ sims x rounds x n log2(n) comparisons.
+ */
+const SIM_WORK_BUDGET = 8_000_000;
+
+/**
+ * How many simulations to run for a field of `n` with `roundsLeft` to play.
+ *
+ * A flat 1500 is fine for a 32-player local event but catastrophic for a large
+ * Regional: at n=1953 with 3 rounds left it is ~100M comparisons, which blew the
+ * Cloudflare Worker CPU limit and made the live page return intermittent 503s
+ * (`outcome: exceededCpu`) for exactly the biggest, busiest events. Scaling the
+ * count keeps the work bounded; the odds are explicitly an estimate, and at the
+ * floor of 120 runs the standard error on a 50% chance is ~4.5pp — well inside
+ * "a guide, not a verdict".
+ *
+ * Exported so the UI can state the real number it used.
+ */
+export function simCountFor(n: number, roundsLeft: number): number {
+  if (n <= 1 || roundsLeft <= 0) return MAX_SIMS;
+  const perSim = roundsLeft * n * Math.max(1, Math.log2(n));
+  return Math.max(MIN_SIMS, Math.min(MAX_SIMS, Math.floor(SIM_WORK_BUDGET / perSim)));
+}
+
 /**
  * Monte-Carlo Top-cut probability. Simulates the remaining Swiss rounds many
  * times — pairing within score brackets, resolving each game by the Glicko
  * win-probability of the two players — then cuts the field by final points
  * (current OMW% as the tiebreak proxy). An estimate, not a guarantee: it ignores
  * rematch-avoidance and draws, so read it next to the provable bubble status.
+ *
+ * `sims` defaults to a size-aware budget — see `simCountFor`.
  */
 export function simulateTopCut(
   standings: Standing[],
   roundsLeft: number,
   topCut: number,
   scoring: Scoring,
-  sims = 1500,
+  sims = simCountFor(standings.length, roundsLeft),
 ): Map<string, number> {
   const counts = new Map<string, number>();
   const n = standings.length;
