@@ -25,7 +25,8 @@ import { isRegion, REGION_LABELS } from "@/lib/regions";
 import { calendarForCountry, isSetCode, SET_LABELS, setForDate } from "@/lib/sets";
 import { isProvisional } from "@/lib/glicko";
 
-export const dynamic = "force-dynamic";
+// See src/lib/cache.ts — `force-dynamic` would disable the query cache.
+export const revalidate = 300;
 
 export default async function PlayerPage({
   params,

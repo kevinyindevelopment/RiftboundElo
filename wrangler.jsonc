@@ -10,6 +10,14 @@
 		"directory": ".open-next/assets",
 		"binding": "ASSETS"
 	},
+	// Incremental cache store for ISR pages + `unstable_cache` query results.
+	// The binding NAME is fixed by the OpenNext adapter — it looks up exactly
+	// `NEXT_INC_CACHE_KV` (see open-next.config.ts). Without this the app falls
+	// back to querying Neon on every request.
+	// Created with:  npx wrangler kv namespace create NEXT_INC_CACHE_KV
+	"kv_namespaces": [
+		{ "binding": "NEXT_INC_CACHE_KV", "id": "d0342292048547c2bb915e576e2dc1d5" }
+	],
 	// Keep the free riftelo.<your-subdomain>.workers.dev URL alive alongside the
 	// custom route — it's our runtime smoke-test target before DNS is wired.
 	"workers_dev": true,

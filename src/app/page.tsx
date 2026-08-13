@@ -1,29 +1,38 @@
 import Link from "next/link";
+import { connection } from "next/server";
 import {
   getGlobalStats,
   getRecentEvents,
   getRegionSummary,
-  getStores,
+  getTopStores,
   getUpcomingEvents,
 } from "@/lib/queries";
 import { Card, StatCard } from "@/components/ui";
 import { EventList } from "@/components/events";
 import { REGION_LABELS, REGION_SUBTITLES, type Region } from "@/lib/regions";
 
-export const dynamic = "force-dynamic";
+// NOT `force-dynamic`: that implies `fetchCache = "force-no-store"`, which makes
+// every `unstable_cache` read a no-op (see src/lib/cache.ts), so the page would
+// re-run all its queries against Neon on every hit.
+export const revalidate = 300;
 
 export default async function HomePage() {
-  const [stats, upcoming, recent, stores, regions] = await Promise.all([
+  // This page reads no request-scoped input, so Next would otherwise PRERENDER
+  // it during `next build` — which would make every deploy require a reachable
+  // database and bake a build-time snapshot into the bundle. `connection()`
+  // stops prerendering without disabling caches: the page renders per request,
+  // while its queries below still serve from the KV incremental cache.
+  // Must be called OUTSIDE the cached queries — request APIs are not readable
+  // inside an `unstable_cache` scope.
+  await connection();
+
+  const [stats, upcoming, recent, topStores, regions] = await Promise.all([
     getGlobalStats(),
     getUpcomingEvents(8),
     getRecentEvents(8),
-    getStores(),
+    getTopStores(6),
     getRegionSummary(),
   ]);
-
-  const topStores = [...stores]
-    .sort((a, b) => b._count.events - a._count.events)
-    .slice(0, 6);
 
   return (
     <div className="space-y-8">

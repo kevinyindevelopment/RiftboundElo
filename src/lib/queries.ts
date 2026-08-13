@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { cachedQuery, TTL } from "@/lib/cache";
 import { fmtDate, ordinal } from "@/lib/format";
 import { isRegion } from "@/lib/regions";
 import {
@@ -26,46 +27,74 @@ function eventRegion(region?: string) {
  * already the sample-size–regressed value (see recompute-elo / glicko), so a
  * straight sort by it ranks proven players above small lucky/unlucky samples.
  */
-export async function getLeaderboard(limit = 100, region?: string, offset = 0) {
-  return prisma.player.findMany({
-    where: { gamesPlayed: { gte: MIN_RANKED_GAMES }, ...playerRegion(region) },
-    orderBy: [{ rating: "desc" }, { gamesPlayed: "desc" }],
-    take: limit,
-    skip: offset,
-  });
-}
+export const getLeaderboard = cachedQuery(
+  async function getLeaderboard(limit = 100, region?: string, offset = 0) {
+    return prisma.player.findMany({
+      where: { gamesPlayed: { gte: MIN_RANKED_GAMES }, ...playerRegion(region) },
+      orderBy: [{ rating: "desc" }, { gamesPlayed: "desc" }],
+      take: limit,
+      skip: offset,
+    });
+  },
+  ["leaderboard"],
+);
 
-export async function getGlobalStats() {
-  const [players, rankedPlayers, events, matches, decks, stores] = await Promise.all([
-    prisma.player.count(),
-    prisma.player.count({ where: { gamesPlayed: { gte: MIN_RANKED_GAMES } } }),
-    prisma.event.count(),
-    prisma.match.count(),
-    prisma.deck.count(),
-    prisma.store.count(),
-  ]);
-  return { players, rankedPlayers, events, matches, decks, stores };
-}
+/**
+ * Site-wide totals for the home dashboard. ONE round trip, not six: every query
+ * here is a separate HTTPS request to Neon (`poolQueryViaFetch`, see prisma.ts),
+ * so round-trip count — not scan cost — is what the home page pays for.
+ */
+export const getGlobalStats = cachedQuery(async function getGlobalStats() {
+  const [row] = await prisma.$queryRawUnsafe<
+    {
+      players: number;
+      rankedPlayers: number;
+      events: number;
+      matches: number;
+      decks: number;
+      stores: number;
+    }[]
+  >(
+    `SELECT (SELECT COUNT(*) FROM "Player")::int AS players,
+            (SELECT COUNT(*) FROM "Player" WHERE "gamesPlayed" >= $1)::int AS "rankedPlayers",
+            (SELECT COUNT(*) FROM "Event")::int AS events,
+            (SELECT COUNT(*) FROM "Match")::int AS matches,
+            (SELECT COUNT(*) FROM "Deck")::int AS decks,
+            (SELECT COUNT(*) FROM "Store")::int AS stores`,
+    MIN_RANKED_GAMES,
+  );
+  return row;
+}, ["global-stats"]);
 
 const now = () => new Date();
 
-export async function getUpcomingEvents(limit = 12, region?: string) {
-  return prisma.event.findMany({
-    where: { startDatetime: { gte: now() }, ...eventRegion(region) },
-    orderBy: { startDatetime: "asc" },
-    take: limit,
-    include: { store: true },
-  });
-}
+// `now()` is evaluated inside the cached function, so it is NOT part of the
+// cache key — the upcoming/past boundary just moves on each revalidation.
+export const getUpcomingEvents = cachedQuery(
+  async function getUpcomingEvents(limit = 12, region?: string) {
+    return prisma.event.findMany({
+      where: { startDatetime: { gte: now() }, ...eventRegion(region) },
+      orderBy: { startDatetime: "asc" },
+      take: limit,
+      include: { store: true },
+    });
+  },
+  ["upcoming-events"],
+  TTL.short,
+);
 
-export async function getRecentEvents(limit = 12, region?: string) {
-  return prisma.event.findMany({
-    where: { startDatetime: { lt: now() }, ...eventRegion(region) },
-    orderBy: { startDatetime: "desc" },
-    take: limit,
-    include: { store: true, _count: { select: { entries: true } } },
-  });
-}
+export const getRecentEvents = cachedQuery(
+  async function getRecentEvents(limit = 12, region?: string) {
+    return prisma.event.findMany({
+      where: { startDatetime: { lt: now() }, ...eventRegion(region) },
+      orderBy: { startDatetime: "desc" },
+      take: limit,
+      include: { store: true, _count: { select: { entries: true } } },
+    });
+  },
+  ["recent-events"],
+  TTL.short,
+);
 
 export const SEARCH_PAGE_SIZE = 25;
 
@@ -186,12 +215,25 @@ export async function searchAll(
   };
 }
 
-export async function getStores() {
+export const getStores = cachedQuery(async function getStores() {
   return prisma.store.findMany({
     orderBy: { name: "asc" },
     include: { _count: { select: { events: true } } },
   });
-}
+}, ["stores"]);
+
+/**
+ * The busiest stores, for the home page's short list. Sorts and limits IN the
+ * DB — the home page used to call `getStores()` (every ~450 stores, each with a
+ * correlated event-count subquery) and then slice 6 off the top in JS.
+ */
+export const getTopStores = cachedQuery(async function getTopStores(limit = 6) {
+  return prisma.store.findMany({
+    orderBy: { events: { _count: "desc" } },
+    take: limit,
+    include: { _count: { select: { events: true } } },
+  });
+}, ["top-stores"]);
 
 export async function getStore(id: string) {
   return prisma.store.findUnique({
@@ -205,36 +247,67 @@ export async function getStore(id: string) {
   });
 }
 
-/** Players ranked by event attendance (used when no Elo data exists yet). */
-export async function getPlayersByAttendance(limit = 300, region?: string) {
-  const players = await prisma.player.findMany({
-    where: { ...playerRegion(region) },
-    include: { _count: { select: { entries: true } } },
-    take: 1000,
-  });
-  return players
-    .sort((a, b) => b._count.entries - a._count.entries || b.rating - a.rating)
-    .slice(0, limit);
-}
+/**
+ * Players ranked by event attendance (used when no Elo data exists yet).
+ * Ordered and limited in the DB. This previously pulled 1000 full player rows
+ * (each with a correlated entry-count subquery) and sorted them in JS, so it
+ * both over-fetched and silently truncated: the "top 400 by attendance" were
+ * only the top 400 of an arbitrary unordered 1000, not of the whole table.
+ */
+export const getPlayersByAttendance = cachedQuery(
+  async function getPlayersByAttendance(limit = 300, region?: string) {
+    return prisma.player.findMany({
+      where: { ...playerRegion(region) },
+      include: { _count: { select: { entries: true } } },
+      orderBy: [{ entries: { _count: "desc" } }, { rating: "desc" }],
+      take: limit,
+    });
+  },
+  ["players-by-attendance"],
+);
 
-export async function hasEloData(): Promise<boolean> {
-  return (await prisma.match.count()) > 0;
-}
+export const hasEloData = cachedQuery(
+  async function hasEloData(): Promise<boolean> {
+    return (await prisma.match.count()) > 0;
+  },
+  ["has-elo-data"],
+  TTL.long,
+);
 
-/** Per-region tallies for the home dashboard. */
-export async function getRegionSummary() {
+/**
+ * Per-region tallies for the home dashboard. ONE round trip covering every
+ * region. This used to fan out to REGION_ORDER.length x 3 counts — with 12
+ * regions that is 36 separate HTTPS queries to Neon (each Prisma call is its
+ * own fetch, see prisma.ts) on every single home-page render, and they were
+ * awaited sequentially inside the map to boot.
+ */
+export const getRegionSummary = cachedQuery(async function getRegionSummary() {
   const { REGION_ORDER } = await import("@/lib/regions");
-  return Promise.all(
-    REGION_ORDER.map(async (region) => ({
-      region,
-      stores: await prisma.store.count({ where: { region } }),
-      events: await prisma.event.count({ where: { store: { region } } }),
-      rankedPlayers: await prisma.player.count({
-        where: { region, gamesPlayed: { gte: MIN_RANKED_GAMES } },
-      }),
-    })),
+  const regions = [...REGION_ORDER];
+  // $1 is the ranked-games floor; the regions occupy $2..$N. The ::text cast is
+  // required — Postgres can't infer a bare parameter's type inside VALUES.
+  const values = regions.map((_, i) => `($${i + 2}::text)`).join(",");
+  const rows = await prisma.$queryRawUnsafe<
+    { region: string; stores: number; events: number; rankedPlayers: number }[]
+  >(
+    `SELECT r.region,
+            (SELECT COUNT(*) FROM "Store" s WHERE s.region = r.region)::int AS stores,
+            (SELECT COUNT(*) FROM "Event" e
+               JOIN "Store" s ON s.id = e."storeId"
+              WHERE s.region = r.region)::int AS events,
+            (SELECT COUNT(*) FROM "Player" p
+              WHERE p.region = r.region AND p."gamesPlayed" >= $1)::int AS "rankedPlayers"
+     FROM (VALUES ${values}) AS r(region)`,
+    MIN_RANKED_GAMES,
+    ...regions,
   );
-}
+  // Preserve REGION_ORDER regardless of what order the DB hands rows back.
+  const byRegion = new Map(rows.map((r) => [r.region, r]));
+  return REGION_ORDER.map(
+    (region) =>
+      byRegion.get(region) ?? { region, stores: 0, events: 0, rankedPlayers: 0 },
+  );
+}, ["region-summary"]);
 
 export async function getPlayer(id: string) {
   return prisma.player.findUnique({ where: { id } });
@@ -695,13 +768,17 @@ export async function getPlayerMatchHistory(
   return { matches: rows, total, page: p, pages, pageSize };
 }
 
-export async function getEvents(limit = 100) {
-  return prisma.event.findMany({
-    orderBy: { startDatetime: "desc" },
-    take: limit,
-    include: { store: true, _count: { select: { matches: true, entries: true } } },
-  });
-}
+export const getEvents = cachedQuery(
+  async function getEvents(limit = 100) {
+    return prisma.event.findMany({
+      orderBy: { startDatetime: "desc" },
+      take: limit,
+      include: { store: true, _count: { select: { matches: true, entries: true } } },
+    });
+  },
+  ["events"],
+  TTL.short,
+);
 
 export async function getEvent(id: string) {
   return prisma.event.findUnique({
@@ -908,7 +985,9 @@ function setCaseSql(dateExpr: string, countryExpr: string): string {
  * — returns ~one row per Legend instead of streaming every match into memory.
  * Optional `set` restricts to games played while that set was live.
  */
-export async function getMetagame(set?: SetCode) {
+// The single most expensive query in the app: it aggregates BOTH sides of every
+// non-bye match in the database, joined to Deck/Event/Store. Cached longest.
+export const getMetagame = cachedQuery(async function getMetagame(set?: SetCode) {
   const legend = "COALESCE(d.legend, d.name)";
   // Per-side result rows (one match contributes two sides). Legend from the
   // side's deck; win/loss/draw from the winner. Set classification from the
@@ -968,4 +1047,4 @@ export async function getMetagame(set?: SetCode) {
   return [...byLegend.values()]
     .filter((a) => a.wins + a.losses + a.draws > 0)
     .sort((a, b) => b.wins + b.draws + b.losses - (a.wins + a.draws + a.losses));
-}
+}, ["metagame"], TTL.long);

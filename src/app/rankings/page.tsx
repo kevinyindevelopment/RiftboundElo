@@ -5,7 +5,10 @@ import { RegionTabs } from "@/components/region-tabs";
 import { pct, winRate } from "@/lib/format";
 import { isRegion, REGION_LABELS, REGION_SUBTITLES } from "@/lib/regions";
 
-export const dynamic = "force-dynamic";
+// Reading searchParams already forces per-request rendering; `revalidate`
+// (rather than `force-dynamic`) is what lets the cached queries inside actually
+// serve from cache — see src/lib/cache.ts.
+export const revalidate = 300;
 
 export default async function RankingsPage({
   searchParams,

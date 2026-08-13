@@ -5,7 +5,8 @@ import { PageTitle } from "@/components/ui";
 import { EventList } from "@/components/events";
 import { RegionBadge } from "@/components/region-tabs";
 
-export const dynamic = "force-dynamic";
+// See src/lib/cache.ts — `force-dynamic` would disable the query cache.
+export const revalidate = 300;
 
 export default async function StorePage({
   params,

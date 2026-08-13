@@ -22,6 +22,11 @@ import {
 } from "@/components/tournament";
 import { fmtDate } from "@/lib/format";
 
+// DELIBERATELY still force-dynamic. This is the in-venue tournament companion —
+// players refresh it between rounds for live pairings and standings, so serving
+// a cached copy would be actively wrong. Note this also disables `unstable_cache`
+// for anything this page calls (see src/lib/cache.ts), which is exactly what we
+// want here: `getEvent` must always hit the database.
 export const dynamic = "force-dynamic";
 
 /** A match counts toward standings only once it has a real result. */

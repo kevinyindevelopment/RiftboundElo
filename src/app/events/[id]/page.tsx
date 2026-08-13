@@ -82,6 +82,9 @@ function Pager({
   );
 }
 
+// DELIBERATELY still force-dynamic: standings and pairings update round by round
+// during an event, and this is the page people check on the day. Its queries are
+// per-event and long-tail, so it is not a meaningful share of database load.
 export const dynamic = "force-dynamic";
 
 export default async function EventPage({

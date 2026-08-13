@@ -19,6 +19,12 @@ Critical facts:
   always-adapter (`PrismaNeon`) + `.prisma/client` in `serverExternalPackages` +
   `neonConfig.poolQueryViaFetch` are what make Prisma work on Workers. Reverting
   any of them breaks the live site (engine-not-found / wasm-fs-read / random 500s).
+- **Never add `export const dynamic = "force-dynamic"` to a page.** It implies
+  `fetchCache = "force-no-store"`, which makes every `unstable_cache` read a
+  silent no-op — the page goes back to querying Neon on every hit with no error
+  and no symptom except the bill. Use `export const revalidate = <seconds>`.
+  The two `/events/[id]` pages are the deliberate exception (live standings).
+  Read the Caching section of DEPLOYMENT.md before touching this.
 - The app is served under the **`/riftelo`** basePath; the root of the domain is
   reserved for other content.
 

@@ -4,7 +4,10 @@ import { Card, PageTitle, PlayerLink, ProvisionalMark } from "@/components/ui";
 import { regionLabel } from "@/lib/regions";
 import { fmtDate } from "@/lib/format";
 
-export const dynamic = "force-dynamic";
+// Search results are keyed on a free-text term, so `searchAll` is deliberately
+// NOT cached (unbounded cache keys). Reading searchParams keeps this page
+// per-request anyway; `revalidate` only affects any cached query it may add.
+export const revalidate = 300;
 
 type Cursor = "pp" | "sp" | "ep";
 type Cursors = { pp: number; sp: number; ep: number };

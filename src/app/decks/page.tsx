@@ -4,7 +4,9 @@ import { SetTabs } from "@/components/set-tabs";
 import { pct, winRate } from "@/lib/format";
 import { isSetCode, SET_LABELS, SET_ORDER, setForDate, type SetCode } from "@/lib/sets";
 
-export const dynamic = "force-dynamic";
+// See src/lib/cache.ts — `force-dynamic` would disable the query cache, and the
+// metagame aggregate this page runs is the most expensive query in the app.
+export const revalidate = 900;
 
 export default async function DecksPage({
   searchParams,

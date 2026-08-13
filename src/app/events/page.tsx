@@ -4,7 +4,9 @@ import { EventList } from "@/components/events";
 import { RegionTabs } from "@/components/region-tabs";
 import { isRegion, REGION_LABELS } from "@/lib/regions";
 
-export const dynamic = "force-dynamic";
+// See src/lib/cache.ts — `force-dynamic` would disable the query cache. Kept
+// short because the event list visibly moves on event days.
+export const revalidate = 120;
 
 export default async function EventsPage({
   searchParams,

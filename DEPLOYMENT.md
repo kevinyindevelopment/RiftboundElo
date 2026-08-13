@@ -30,7 +30,8 @@ wsl.exe -e bash -lc "bash /mnt/c/Users/kyin9/Documents/GitHub/RiftboundElo/scrip
 | Routing | A Cloudflare **Worker Route** `kevin-yin.com/riftelo*` → the `riftelo` Worker. The rest of the domain is untouched. |
 | DNS | A **proxied `AAAA @ 100::`** record on the apex (a black-hole address; Cloudflare's edge fronts it and the route serves `/riftelo*`). Cloudflare returns both IPv4 + IPv6 anycast for it. |
 | Database | Neon Postgres. App uses the **pooled** URL; CLI scripts use the **direct** URL. |
-| Config files | `wrangler.jsonc` (Worker name `riftelo`, route, `nodejs_compat`), `open-next.config.ts` |
+| Caching | Cloudflare **KV** namespace bound as `NEXT_INC_CACHE_KV`, used as OpenNext's incremental cache (see [Caching](#caching-dont-undo-this-either)) |
+| Config files | `wrangler.jsonc` (Worker name `riftelo`, route, `nodejs_compat`, KV binding), `open-next.config.ts` |
 
 ### Why the app can talk to Postgres on Workers (don't undo this)
 
@@ -57,6 +58,45 @@ Cloudflare Workers can't run Prisma's native Rust query engine, so the setup is:
 If any of these regress, symptoms are: `Could not locate the Query Engine`
 (engineType), `readAll .../query_compiler_bg.wasm` (serverExternalPackages), or
 intermittent 500s on heavy pages (poolQueryViaFetch).
+
+### Caching (don't undo this either)
+
+The site's database reads are cached. This is a **cost** feature, not a speed
+one: every Prisma call is a separate HTTPS request to Neon, and Neon only
+auto-suspends after ~5 minutes idle — so with uncached pages, one visitor (or
+crawler) every few minutes pins the compute on 24/7 and burns the free tier's
+monthly compute-hour budget in days. That is what took the site down.
+
+Four pieces, all required together:
+
+1. **`open-next.config.ts`** → `incrementalCache: kvIncrementalCache` and
+   `queue: "direct"`. Without an incremental cache there is nowhere to persist
+   cached values and every request falls through to Neon.
+2. **`wrangler.jsonc`** → a KV namespace bound as **`NEXT_INC_CACHE_KV`**. The
+   binding name is fixed by the adapter; it is looked up by that exact string.
+   Create one with `npx wrangler kv namespace create NEXT_INC_CACHE_KV`.
+3. **`src/lib/cache.ts`** → `cachedQuery()` wraps the read-only queries in
+   `unstable_cache`.
+4. **Route segment configs** → pages export `revalidate`, **not**
+   `dynamic = "force-dynamic"`. This is the subtle one: `force-dynamic` implies
+   `fetchCache = "force-no-store"`, and `unstable_cache` skips the cache
+   entirely under that flag. Re-adding `force-dynamic` to a page silently turns
+   its caching off with no error and no visible symptom except the Neon bill.
+
+`/events/[id]` and `/events/[id]/live` are **deliberately** still
+`force-dynamic` — they show live standings during a tournament.
+
+The home page and `/stores` call `await connection()`. They read no
+request-scoped input, so without it Next prerenders them during `next build`,
+which would make every deploy require a reachable database and bake a
+build-time snapshot into the bundle. `connection()` opts them out of
+prerendering while leaving the query cache active — the build still runs with
+no DB access at all.
+
+`unstable_cache` persists values via `JSON.stringify` and returns
+`JSON.parse`, so `Date` fields come back as ISO **strings**. `cachedQuery`
+runs results through `reviveDates` to restore them; if you cache a new query
+that returns a date under an unfamiliar field name, add it to `DATE_KEYS`.
 
 ---
 

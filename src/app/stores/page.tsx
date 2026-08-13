@@ -1,11 +1,17 @@
 import Link from "next/link";
+import { connection } from "next/server";
 import { getStores } from "@/lib/queries";
 import { Card, PageTitle } from "@/components/ui";
 import { REGION_ORDER, REGION_LABELS, REGION_SUBTITLES, regionLabel } from "@/lib/regions";
 
-export const dynamic = "force-dynamic";
+// See src/lib/cache.ts — `force-dynamic` would disable the query cache.
+export const revalidate = 300;
 
 export default async function StoresPage() {
+  // Takes no request-scoped input, so without this Next would prerender it at
+  // build time and the deploy would require a live database. See app/page.tsx.
+  await connection();
+
   const stores = await getStores();
 
   // Group by region in canonical order.
