@@ -163,11 +163,27 @@ What follows from this:
   skips the work entirely; trimming what a render does (see the live page's
   pagination) only shortens an invocation that still has to happen.
 
-**Workers Paid (~$5/month)** would take the residual to zero — it raises the CPU
-ceiling and makes `limits.cpu_ms` settable. It is worth buying if the last few
-percent matter, but it is **optional**, not required: the free configuration
-above removed roughly three quarters of the failures at no cost. Exhaust the free
-levers (interception, longer TTLs, less per-render work) before reaching for it.
+### Decision: we stay on Workers Free, knowingly (Aug 2026)
+
+**Workers Paid (~$5/month)** would remove this failure class outright — it raises
+the CPU ceiling to 30s (200x the worst render) and makes `limits.cpu_ms`
+settable. It is the correct fix, and no free configuration closes the gap: even
+a cache HIT costs ~141 ms against a ~10 ms budget.
+
+We are **deliberately staying on Free for now**, because the site currently has
+one user. Don't re-open this without new information. What it costs us:
+
+- A failing request returns Cloudflare's own bare `error code: 1102` page — 17
+  bytes of plain text, no styling. It cannot be caught or customised, because
+  the runtime has already terminated the Worker; our code is not running.
+- Refreshing almost always works.
+- **The failure concentrates under bursts**, i.e. many people refreshing at once
+  — which is precisely tournament-day usage of `/events/[id]/live`. Measured:
+  back-to-back requests failed ~50%, requests 25s apart ~10%.
+
+**Revisit the moment either becomes true:** the site gets more than one real
+user, or a tournament day is actually disrupted. At that point it is a one-click
+upgrade plus adding `limits.cpu_ms` to `wrangler.jsonc`.
 
 ## Checklist for a change that touches the database
 
