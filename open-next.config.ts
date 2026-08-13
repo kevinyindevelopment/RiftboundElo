@@ -21,7 +21,18 @@ import kvIncrementalCache from "@opennextjs/cloudflare/overrides/incremental-cac
 // No `tagCache` is configured because nothing calls revalidateTag/revalidatePath
 // yet; time-based revalidation does not need one. If the ingest ever grows a
 // "publish now" hook, add a tag cache binding at the same time.
+// `enableCacheInterception` is the reason the site survives the Cloudflare
+// Workers FREE plan's CPU budget. Without it, every request — cache hit or not —
+// boots the full Next.js server function before anything can be served. With it,
+// the routing layer checks the incremental cache FIRST and returns the cached
+// response directly (see @opennextjs/aws routingHandler.js: it returns before
+// the server function is ever invoked), which is drastically less CPU.
+//
+// Safe here because it is only unsupported alongside PPR, and PPR arrives with
+// `cacheComponents: true`, which this app does not enable. If Cache Components
+// is ever adopted, this MUST be turned off.
 export default defineCloudflareConfig({
   incrementalCache: kvIncrementalCache,
   queue: "direct",
+  enableCacheInterception: true,
 });

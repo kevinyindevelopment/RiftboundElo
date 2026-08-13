@@ -127,13 +127,27 @@ cache-missing requests fail this way**, and it is NOT size-dependent — an even
 with 1 entrant and 0 matches fails just as readily as a 1,953-player Regional,
 and `/rankings` fails too.
 
-**The decisive number:** `wrangler deploy` reports `Worker Startup Time: 28 ms`
-for this bundle. That is the cost of initialising the Next.js/OpenNext server
-*before it renders anything*, and it is nearly 3x the entire Free-plan CPU
-budget. So any invocation that includes cold-start initialisation blows the cap
-on arrival, regardless of the page, the query, or the cache. This is a platform
-mismatch between Next.js-on-Workers and the Free plan — not something any
-application-level change can resolve.
+Enforcement is evidently **burst-based rather than a hard ceiling**: renders
+costing 550–880 ms of CPU routinely succeed, while others are cut off and
+reported as `cpuTime: 10`. Don't reason about it as a clean cap.
+
+For context on how expensive a render is here, `wrangler deploy` reports
+`Worker Startup Time: ~29 ms` — the cost of initialising the Next.js/OpenNext
+server before it renders anything at all.
+
+**The single most effective fix is free**, and it is already applied:
+`enableCacheInterception: true` in `open-next.config.ts`. It makes the routing
+layer check the incremental cache and return the cached response *before* the
+Next.js server function is invoked at all. Measured on the live site, same pages
+and spacing:
+
+| | failure rate | median CPU |
+|---|---|---|
+| without interception | **12%** (3/24) | ~550 ms |
+| with interception | **~3%** (2/68) | **141 ms** |
+
+The residual ~3% is cache-MISS and ISR-revalidation requests, which still have
+to do a real render. Longer TTLs reduce how often that happens.
 
 What follows from this:
 
@@ -145,15 +159,15 @@ What follows from this:
 - **Short TTLs trade reliability for freshness here.** `/events/[id]/live` at 30s
   revalidates often and is therefore the most exposed page. That is a deliberate
   choice for tournament-day freshness, not an oversight.
-- **Cutting per-render work does not fix it.** No amount of optimisation gets an
-  SSR render under 10 ms. It reduces the odds of being cut off; it cannot
-  eliminate them.
+- **Avoiding the render beats optimising it.** Cache interception wins because it
+  skips the work entirely; trimming what a render does (see the live page's
+  pagination) only shortens an invocation that still has to happen.
 
-**The actual fix is the Workers Paid plan (~$5/month)**, which raises the default
-CPU ceiling to 30s and makes `limits.cpu_ms` settable. Against a Neon Launch bill
-this is small, and it removes a site-wide class of intermittent 503s that no code
-change can. Treat it as the first thing to buy if reliability matters more than
-the last few dollars.
+**Workers Paid (~$5/month)** would take the residual to zero — it raises the CPU
+ceiling and makes `limits.cpu_ms` settable. It is worth buying if the last few
+percent matter, but it is **optional**, not required: the free configuration
+above removed roughly three quarters of the failures at no cost. Exhaust the free
+levers (interception, longer TTLs, less per-render work) before reaching for it.
 
 ## Checklist for a change that touches the database
 
