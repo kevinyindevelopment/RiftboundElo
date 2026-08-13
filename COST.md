@@ -108,6 +108,14 @@ cache-missing requests fail this way**, and it is NOT size-dependent — an even
 with 1 entrant and 0 matches fails just as readily as a 1,953-player Regional,
 and `/rankings` fails too.
 
+**The decisive number:** `wrangler deploy` reports `Worker Startup Time: 28 ms`
+for this bundle. That is the cost of initialising the Next.js/OpenNext server
+*before it renders anything*, and it is nearly 3x the entire Free-plan CPU
+budget. So any invocation that includes cold-start initialisation blows the cap
+on arrival, regardless of the page, the query, or the cache. This is a platform
+mismatch between Next.js-on-Workers and the Free plan — not something any
+application-level change can resolve.
+
 What follows from this:
 
 - **Caching is the mitigation, and it is why the caching matters twice over.**
