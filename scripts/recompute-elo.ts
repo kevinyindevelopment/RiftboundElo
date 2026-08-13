@@ -80,6 +80,17 @@ async function main() {
   // Pre-Rift (set pre-release) events don't count toward Elo — drop their
   // matches entirely so they produce no RatingChange rows and don't touch any
   // player's rating/record. See src/lib/prerift.ts.
+  //
+  // Pre-Rift is the ONLY exclusion, deliberately. Team formats (2v2/trios, 1.7%
+  // of rated matches), free-for-all (0.0%) and limited/draft (5.0%) all still
+  // feed the ladder, because team results are considered indicative enough of
+  // player skill to be worth rating.
+  //
+  // This is knowingly asymmetric with `classifyForAccomplishment` in
+  // src/lib/queries.ts, which DOES exclude 2v2/team and limited events from
+  // profile badges. Badges are meant to mark notable competitive finishes;
+  // ratings are meant to track skill broadly. Don't "fix" one to match the
+  // other without asking — the difference is intended.
   const eligible = matches.filter(
     (m) => !isPreRiftEvent(eventById.get(m.eventId)?.name),
   );
