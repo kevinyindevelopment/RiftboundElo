@@ -25,10 +25,10 @@ import {
   getAllRegistrations,
   getEventDetail,
   getRoundStandings,
-  searchEventsNear,
   hasToken,
   pool,
   type V2Event,
+  type Paginated,
 } from "../src/lib/carde";
 
 const EVENT = Number(process.argv[2] ?? 791304);
@@ -79,17 +79,34 @@ async function main() {
   console.log(`roster: ${roster.size} registrants`);
 
   // ---- nearby events that have actually finished -------------------------
+  // NOTE: the geo search must go out ANONYMOUSLY. Sending an Authorization
+  // header scopes /api/v2/events/ to the token owner and it comes back empty;
+  // only the standings call below needs (and benefits from) the token.
+  const BASE =
+    process.env.CARDE_API_BASE ??
+    "https://api.cloudflare.riftbound.uvsgames.com/hydraproxy";
+  async function searchNearAnon(page: number): Promise<Paginated<V2Event>> {
+    const q = new URLSearchParams({
+      game_slug: "riftbound",
+      latitude: String(LAT),
+      longitude: String(LON),
+      num_miles: String(MILES),
+      start_date_after: SINCE,
+      page: String(page),
+      page_size: "100",
+    });
+    q.append("display_statuses", "completed");
+    const r = await fetch(`${BASE}/api/v2/events/?${q}`, {
+      headers: { Accept: "application/json", "User-Agent": "RiftboundElo/0.1 (personal use)" },
+    });
+    if (!r.ok) throw new Error(`anon event search ${r.status}`);
+    return (await r.json()) as Paginated<V2Event>;
+  }
+
   const now = Date.now();
   const seen = new Map<number, V2Event>();
   for (let page = 1; page <= 25; page++) {
-    const res = await searchEventsNear({
-      latitude: LAT,
-      longitude: LON,
-      miles: MILES,
-      statuses: ["completed"],
-      page,
-      pageSize: 100,
-    });
+    const res = await searchNearAnon(page);
     for (const e of res.results ?? []) {
       const t = e.start_datetime ? Date.parse(e.start_datetime) : NaN;
       if (!Number.isFinite(t) || t < Date.parse(SINCE) || t > now) continue;
