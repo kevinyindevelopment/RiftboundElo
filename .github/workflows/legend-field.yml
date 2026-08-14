@@ -10,6 +10,14 @@ on:
         description: "carde.io event id"
         required: false
         default: "791304"
+      script:
+        description: "which analysis to run"
+        required: false
+        type: choice
+        default: "legend-field"
+        options:
+          - legend-field
+          - legend-forecast
 
 jobs:
   analyze:
@@ -31,4 +39,4 @@ jobs:
       - run: npm ci
 
       - name: Analyze legend field
-        run: npx tsx scripts/legend-field.ts "${{ inputs.event_id }}"
+        run: npx tsx "scripts/${{ inputs.script || 'legend-field' }}.ts" "${{ inputs.event_id }}"
