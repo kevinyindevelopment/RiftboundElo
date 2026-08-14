@@ -25,6 +25,7 @@ import {
   getAllRegistrations,
   getEventDetail,
   getRoundStandings,
+  getRoundMatches,
   hasToken,
   pool,
   type V2Event,
@@ -139,6 +140,7 @@ async function main() {
         .flatMap((p) => p.rounds ?? [])
         .filter((r) => /PLAY|SWISS|ELIM|POD|OPPONENT/i.test(r.round_type ?? ""))
         .sort((a, b) => (b.round_number ?? 0) - (a.round_number ?? 0));
+      const found: Sighting[] = [];
       for (const rd of rounds) {
         const st = await getRoundStandings(rd.id).catch(() => null);
         const list = st?.standings ?? [];
@@ -146,7 +148,7 @@ async function main() {
         for (const s of list) {
           const uid = s.player?.id ?? s.user_event_status?.user?.id;
           if (uid == null || !roster.has(uid)) continue;
-          sightings.push({
+          found.push({
             uid,
             legend: s.user_event_status?.deck_defining_card?.name ?? null,
             eventName: ev.name,
@@ -160,6 +162,29 @@ async function main() {
         break; // most recent round with standings is enough
       }
       scanned++;
+      if (!found.length) return;
+
+      // Standings frequently omit deck_defining_card even for the organizer's
+      // own token; the per-match player_match_relationships carry it more often
+      // (this is the same pair of sources scripts/ingest-stores.ts reads). Only
+      // pay for the match fetch when a registrant actually played here AND the
+      // Legend is still unknown.
+      if (found.some((f) => !f.legend)) {
+        const byUid = new Map<number, string>();
+        for (const rd of rounds) {
+          const ms = await getRoundMatches(rd.id).catch(() => []);
+          for (const m of ms) {
+            for (const pmr of m.player_match_relationships ?? []) {
+              const uid = pmr.player?.id ?? pmr.user_event_status?.user?.id;
+              const name = pmr.user_event_status?.deck_defining_card?.name;
+              if (uid != null && name && !byUid.has(uid)) byUid.set(uid, name);
+            }
+          }
+          if (byUid.size) break; // one round is enough; the deck is fixed per event
+        }
+        for (const f of found) if (!f.legend) f.legend = byUid.get(f.uid) ?? null;
+      }
+      sightings.push(...found);
     },
     8,
   );
