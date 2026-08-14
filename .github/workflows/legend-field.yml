@@ -18,6 +18,7 @@ on:
         options:
           - legend-field
           - legend-forecast
+          - roster-recent
 
 jobs:
   analyze:
