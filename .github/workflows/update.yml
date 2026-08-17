@@ -37,6 +37,13 @@ on:
     - cron: "0 */6 * * *"
   # Allow manual runs from the Actions tab (useful for testing / on-demand).
   workflow_dispatch:
+    inputs:
+      store_ids:
+        description: >-
+          Space-separated carde store ids to ingest INSTEAD of the routine
+          known-store sync. Leave blank for the normal scoped refresh.
+        required: false
+        type: string
 
 # Never let two refreshes overlap (they'd contend on the same Neon writes).
 concurrency:
@@ -65,11 +72,36 @@ jobs:
       - run: npm ci
 
       - name: Ingest new results (scoped to tracked stores + premier)
+        env:
+          # Via env, not `${{ }}` inline, so the value can't break out of the script.
+          STORE_IDS: ${{ inputs.store_ids }}
         run: |
           BEFORE=$(npx tsx scripts/match-fingerprint.ts)
           echo "match fingerprint before: $BEFORE"
-          npm run ingest:stores
-          npm run ingest:stores -- --premier
+          if [ -n "$STORE_IDS" ]; then
+            # Ad-hoc: pull named store(s) only.
+            #
+            # Why this exists: carde's location search silently omits some real
+            # venues. Verified for store 64147 (Gen.G Esports x ASU LA GAME
+            # School, Los Angeles) — a 10/25/50-mile search centred on its OWN
+            # coordinates returns none of its events, so --discover / --ca-grid
+            # can never find it, and its 128-player event was invisible to us.
+            # Such a store has to be named by id once; the first ingest writes
+            # the Store row, after which the routine known-store sync (which
+            # reads the Store table) picks the venue up on its own forever.
+            case "$STORE_IDS" in
+              "" | *[!0-9\ ]*)
+                echo "store_ids must be space-separated numbers; got: $STORE_IDS"
+                exit 1
+                ;;
+            esac
+            echo "Targeted ingest of store(s): $STORE_IDS"
+            # Unquoted on purpose: --store takes several ids as separate args.
+            npm run ingest:stores -- --store $STORE_IDS
+          else
+            npm run ingest:stores
+            npm run ingest:stores -- --premier
+          fi
           AFTER=$(npx tsx scripts/match-fingerprint.ts)
           echo "match fingerprint after:  $AFTER"
           echo "FP_BEFORE=$BEFORE" >> "$GITHUB_ENV"
