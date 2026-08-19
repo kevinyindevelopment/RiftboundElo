@@ -13,6 +13,7 @@
     "db:studio": "prisma studio",
     "db:export": "tsx scripts/db-export.ts",
     "db:import": "tsx scripts/db-import.ts",
+    "neon:tune": "tsx scripts/neon-tune.ts",
     "ingest": "tsx scripts/ingest.ts",
     "ingest:stores": "tsx scripts/ingest-stores.ts",
     "probe": "tsx scripts/probe.ts",
