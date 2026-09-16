@@ -156,7 +156,7 @@ Neon Postgres. Builds and deploys must run inside WSL — OpenNext's bundler doe
 not work on native Windows paths:
 
 ```sh
-wsl.exe -e bash -lc "bash /mnt/c/Users/kyin9/Documents/GitHub/RiftboundElo/scripts/deploy.sh"
+wsl.exe -d Ubuntu -e bash -lc "bash /mnt/c/Users/kyin9/Documents/GitHub/RiftboundElo/scripts/deploy.sh"
 ```
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for the full architecture and

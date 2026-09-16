@@ -14,8 +14,10 @@ to [Deploy](#deploy-push-local-changes-live).
   Windows deploys DO NOT WORK.
 
 ```sh
-# From Windows (Bash tool or terminal):
-wsl.exe -e bash -lc "bash /mnt/c/Users/kyin9/Documents/GitHub/RiftboundElo/scripts/deploy.sh"
+# From Windows (Bash tool or terminal).
+# `-d Ubuntu` matters: this machine's DEFAULT WSL distro is docker-desktop,
+# which has no bash, so a bare `wsl.exe -e bash` fails with execvpe(bash).
+wsl.exe -d Ubuntu -e bash -lc "bash /mnt/c/Users/kyin9/Documents/GitHub/RiftboundElo/scripts/deploy.sh"
 ```
 
 ---
@@ -138,7 +140,7 @@ is why there's a separate WSL copy with its own `npm install`.
 2. Typecheck on Windows: `npx tsc --noEmit -p tsconfig.json`.
 3. Run the deploy script **in WSL**:
    ```sh
-   wsl.exe -e bash -lc "bash /mnt/c/Users/kyin9/Documents/GitHub/RiftboundElo/scripts/deploy.sh"
+   wsl.exe -d Ubuntu -e bash -lc "bash /mnt/c/Users/kyin9/Documents/GitHub/RiftboundElo/scripts/deploy.sh"
    ```
    It syncs → `npm install` → `prisma generate` → `opennextjs-cloudflare build`
    → `opennextjs-cloudflare deploy`.
