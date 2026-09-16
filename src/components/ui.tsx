@@ -31,7 +31,7 @@ export function Card({
 }) {
   return (
     <div
-      className={`rounded-xl border border-border bg-surface ${className}`}
+      className={`relative rounded-[14px] border border-border bg-surface/90 shadow-[var(--shadow-card)] transition-[background-color,border-color,transform,box-shadow] ${className}`}
     >
       {children}
     </div>
@@ -40,9 +40,9 @@ export function Card({
 
 export function StatCard({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <Card className="px-4 py-3">
-      <div className="text-xs uppercase tracking-wide text-muted">{label}</div>
-      <div className="text-2xl font-semibold tabular-nums mt-0.5">{value}</div>
+    <Card className="px-4 py-3.5">
+      <div className="text-[11px] uppercase tracking-[0.14em] text-muted">{label}</div>
+      <div className="text-[26px] leading-tight font-semibold tabular-nums mt-1">{value}</div>
     </Card>
   );
 }
@@ -55,9 +55,10 @@ export function PageTitle({
   subtitle?: string;
 }) {
   return (
-    <div className="mb-6">
-      <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
-      {subtitle && <p className="text-muted text-sm mt-1">{subtitle}</p>}
+    <div className="mb-7">
+      <h1 className="text-[28px] sm:text-[32px] font-bold tracking-tight">{title}</h1>
+      {subtitle && <p className="text-muted text-sm mt-1.5">{subtitle}</p>}
+      <div className="rule-irid mt-4" />
     </div>
   );
 }
@@ -69,7 +70,7 @@ export function ResultBadge({ result }: { result: "win" | "loss" | "draw" }) {
     draw: "bg-draw/15 text-draw",
   } as const;
   return (
-    <span className={`inline-block w-5 text-center rounded text-xs font-bold py-0.5 ${map[result]}`}>
+    <span className={`inline-block w-5 text-center rounded-md text-xs font-bold py-0.5 ${map[result]}`}>
       {result[0].toUpperCase()}
     </span>
   );

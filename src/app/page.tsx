@@ -35,21 +35,30 @@ export default async function HomePage() {
   ]);
 
   return (
-    <div className="space-y-8">
-      <section>
-        <h1 className="text-3xl font-bold tracking-tight">
-          <span className="text-accent">Rift</span>Elo
-        </h1>
-        <p className="text-muted mt-1">
-          Your personal Riftbound tracker — local events, stores, players, and an
-          Elo ladder, split across MBS, Flint, and beyond.
-        </p>
+    <div className="space-y-9">
+      <section className="relative overflow-hidden rounded-[18px] border border-border bg-surface/60 px-5 py-7 sm:px-8 sm:py-9 shadow-[var(--shadow-card)]">
+        <div className="pointer-events-none absolute -right-24 -top-28 h-64 w-64 rounded-full bg-accent/10 blur-3xl" />
+        <div className="pointer-events-none absolute -left-24 -bottom-32 h-56 w-56 rounded-full bg-accent-3/10 blur-3xl" />
+        <div className="relative">
+          <div className="flex items-center gap-2 font-mono text-[10.5px] uppercase tracking-[0.22em] text-accent-3">
+            <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent-3" />
+            Live ladder · Glicko-2
+          </div>
+          <h1 className="mt-3 text-3xl sm:text-[40px] leading-[1.06] font-bold tracking-tight">
+            Riftbound competitive ratings,{" "}
+            <span className="text-irid">tracked to the match.</span>
+          </h1>
+          <p className="text-muted mt-3 max-w-2xl text-sm sm:text-[15px]">
+            Local events, stores, players, and a full rating history — split
+            across MBS, Flint, and beyond.
+          </p>
+        </div>
       </section>
 
       <section className="grid sm:grid-cols-3 gap-3">
         {regions.map((r) => (
           <Link key={r.region} href={`/rankings?region=${r.region}`}>
-            <Card className="px-4 py-4 hover:bg-surface-2/50 transition-colors h-full">
+            <Card className="px-4 py-4 hover:bg-surface-2/60 hover:-translate-y-0.5 h-full">
               <div className="text-lg font-semibold">{REGION_LABELS[r.region as Region]}</div>
               <div className="text-xs text-muted">{REGION_SUBTITLES[r.region as Region]}</div>
               <div className="mt-3 flex gap-4 text-sm text-muted">

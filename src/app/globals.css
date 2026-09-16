@@ -1,51 +1,141 @@
 @import "tailwindcss";
 
+/* ---------------------------------------------------------------------------
+   RiftElo design tokens.
+
+   Every component styles itself from these semantic names (bg-surface,
+   text-muted, border-border, text-accent ...), so changing a value here
+   restyles the whole app. Keep the names stable.
+   --------------------------------------------------------------------------- */
+
 :root {
-  --background: #0b0d12;
-  --surface: #141821;
-  --surface-2: #1b2130;
-  --border: #262d3d;
-  --foreground: #e7ecf3;
+  --background: #07090f;
+  --surface: #10141d;
+  --surface-2: #161c28;
+  --surface-3: #1d2534;
+  --border: #222a3a;
+  --border-strong: #33405a;
+  --foreground: #eef1f7;
   --muted: #8b94a7;
-  --accent: #c9a227; /* Riftbound gold */
-  --accent-2: #4f8cff;
+  --accent: #d4af5a; /* Riftbound gold */
+  --accent-2: #5b93ff;
+  --accent-3: #14d3c0; /* arcane teal */
   --win: #3fb950;
   --loss: #f0626f;
   --draw: #b0b8c8;
+  --ring: rgba(212, 175, 90, 0.5);
+
+  /* shared effects */
+  --irid: linear-gradient(100deg, #d4af5a 0%, #e8c27a 24%, #14d3c0 58%, #6f7cff 90%);
+  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.035), 0 20px 44px -30px rgba(0, 0, 0, 0.95);
+  --shadow-lift: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 30px 60px -34px rgba(0, 0, 0, 1);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-surface: var(--surface);
   --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
   --color-foreground: var(--foreground);
   --color-muted: var(--muted);
   --color-accent: var(--accent);
   --color-accent-2: var(--accent-2);
+  --color-accent-3: var(--accent-3);
   --color-win: var(--win);
   --color-loss: var(--loss);
   --color-draw: var(--draw);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --radius-card: 14px;
 }
 
-body {
-  background:
-    radial-gradient(1200px 600px at 50% -10%, #18203180, transparent),
-    var(--background);
-  color: var(--foreground);
-  font-family: var(--font-sans), system-ui, sans-serif;
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    min-height: 100dvh;
+    background:
+      radial-gradient(1100px 520px at 12% -8%, rgba(212, 175, 90, 0.07), transparent 62%),
+      radial-gradient(900px 460px at 92% 2%, rgba(20, 211, 192, 0.055), transparent 60%),
+      var(--background);
+    background-attachment: fixed;
+    color: var(--foreground);
+    font-family: var(--font-sans), system-ui, sans-serif;
+    font-feature-settings: "cv11", "ss01";
+  }
+
+  a {
+    color: inherit;
+  }
+
+  h1, h2, h3 {
+    letter-spacing: -0.02em;
+  }
+
+  ::selection {
+    background: rgba(212, 175, 90, 0.26);
+    color: #fff;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  /* tabular figures everywhere numbers matter */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::-webkit-scrollbar {
+    width: 11px;
+    height: 11px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--surface-3);
+    border: 3px solid var(--background);
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--border-strong);
+  }
 }
 
-a {
-  color: inherit;
+/* Hairline that reads as an arcane seam under section headers. */
+.rule-irid {
+  height: 1px;
+  background: var(--irid);
+  opacity: 0.5;
+}
+
+/* Gradient text for headline numerals. */
+.text-irid {
+  background: var(--irid);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
 }
 
 /* domain accent dots */
-.domain-body { background: #d24b4b; }
-.domain-calm { background: #3aa0c9; }
-.domain-chaos { background: #b052c9; }
-.domain-fury { background: #e0772e; }
-.domain-mind { background: #4f8cff; }
-.domain-order { background: #d8c24a; }
+.domain-body { background: #d24b4b; box-shadow: 0 0 0 1px rgba(210, 75, 75, 0.35); }
+.domain-calm { background: #3aa0c9; box-shadow: 0 0 0 1px rgba(58, 160, 201, 0.35); }
+.domain-chaos { background: #b052c9; box-shadow: 0 0 0 1px rgba(176, 82, 201, 0.35); }
+.domain-fury { background: #e0772e; box-shadow: 0 0 0 1px rgba(224, 119, 46, 0.35); }
+.domain-mind { background: #4f8cff; box-shadow: 0 0 0 1px rgba(79, 140, 255, 0.35); }
+.domain-order { background: #d8c24a; box-shadow: 0 0 0 1px rgba(216, 194, 74, 0.35); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
