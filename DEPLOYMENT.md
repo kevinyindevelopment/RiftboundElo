@@ -31,6 +31,7 @@ wsl.exe -e bash -lc "bash /mnt/c/Users/kyin9/Documents/GitHub/RiftboundElo/scrip
 | DNS | A **proxied `AAAA @ 100::`** record on the apex (a black-hole address; Cloudflare's edge fronts it and the route serves `/riftelo*`). Cloudflare returns both IPv4 + IPv6 anycast for it. |
 | Database | Neon Postgres. App uses the **pooled** URL; CLI scripts use the **direct** URL. |
 | Caching | Cloudflare **KV** namespace bound as `NEXT_INC_CACHE_KV`, used as OpenNext's incremental cache (see [Caching](#caching-dont-undo-this-either)) |
+| Access | **Private.** `kevin-yin.com/riftelo*` sits behind Cloudflare Access (Zero Trust, single-user allow-list) plus a WAF crawler block. `workers_dev` is **off** — it bypassed both. See COST.md. |
 | Config files | `wrangler.jsonc` (Worker name `riftelo`, route, `nodejs_compat`, KV binding), `open-next.config.ts` |
 
 ### Why the app can talk to Postgres on Workers (don't undo this)
@@ -75,6 +76,15 @@ Four pieces, all required together:
 2. **`wrangler.jsonc`** → a KV namespace bound as **`NEXT_INC_CACHE_KV`**. The
    binding name is fixed by the adapter; it is looked up by that exact string.
    Create one with `npx wrangler kv namespace create NEXT_INC_CACHE_KV`.
+
+   > ⚠️ **KV's free tier is 1,000 writes/day, shared across the whole account.**
+   > When that cap is hit, `put`s fail, OpenNext **swallows the error**
+   > (`catch (e) { error(...) }` in `kv-incremental-cache.js`), and the site
+   > silently degrades to fully uncached for the rest of the UTC day — with the
+   > Neon bill as the only symptom. That produced ~$1/day of Neon compute in Aug
+   > 2026. It is safe now **only because Access + the WAF block cut traffic to a
+   > single user.** Reopening the site publicly requires moving to R2 first —
+   > see COST.md.
 3. **`src/lib/cache.ts`** → `cachedQuery()` wraps the read-only queries in
    `unstable_cache`.
 4. **Route segment configs** → pages export `revalidate`, **not**

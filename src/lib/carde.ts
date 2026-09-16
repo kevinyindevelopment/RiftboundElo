@@ -20,7 +20,7 @@ const BASE =
   process.env.CARDE_API_BASE ??
   "https://api.cloudflare.riftbound.uvsgames.com/hydraproxy";
 
-const UA = "RiftboundElo/0.1 (personal use)";
+const UA = "RiftboundElo/0.1";
 
 export class CardeError extends Error {
   constructor(message: string, readonly status: number, readonly body?: unknown) {

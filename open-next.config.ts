@@ -7,10 +7,36 @@ import kvIncrementalCache from "@opennextjs/cloudflare/overrides/incremental-cac
 // Neon on every request — which is what was burning the free tier's monthly
 // compute budget in a couple of days.
 //
-// KV is the right store here: reads are free-tier generous (100k/day), entries
-// are small (rendered HTML + JSON query results), and it is globally replicated
-// so any edge location can serve a hit. Requires the NEXT_INC_CACHE_KV binding
-// in wrangler.jsonc.
+// ── Why KV, and the trap it comes with (read before changing) ──────────────
+//
+// KV's free tier allows **1,000 writes/day per ACCOUNT**, shared with the
+// riftmarket Worker. In Aug 2026 this app blew through that — measured 2,640
+// writes in one day, 2.6x the cap — because every distinct URL is its own cache
+// key and ~51k URLs were crawlable (robots.ts: 33k players + 17.9k events),
+// none of them with `generateStaticParams`. A cold `/events/[id]` costs ~6
+// writes: the ISR entry plus one per cachedQuery it renders.
+//
+// The failure is SILENT. Once the quota is gone, KV `put`s fail and this
+// adapter swallows the error (`catch (e) { error("Failed to set to cache", e) }`
+// in kv-incremental-cache.js); `get` failures `return null`, indistinguishable
+// from a miss. So the cache does not report an outage — it just stops working
+// for the rest of the UTC day and every request falls through to Neon. The only
+// symptom was the bill: ~$1/day of Neon compute, with the database awake 63% of
+// the wall clock. See COST.md for the full measurement.
+//
+// **Why KV is nonetheless correct today:** the fix was applied at the traffic
+// layer, not the storage layer. `/riftelo*` is now behind Cloudflare Access
+// (single-user) plus a WAF crawler block, so the ~51% bot traffic and the whole
+// 51k-URL long-tail crawl are gone. At single-user volume the write count is
+// far under 1,000/day, and KV has a property R2 does not: it **cannot bill
+// overage** — it hard-fails instead. That matches the "never exceed free tier"
+// requirement exactly.
+//
+// ⚠️ **If the site is ever reopened to the public, this becomes wrong again.**
+// The 1,000/day cap will be hit and the cache will silently die exactly as
+// before. At that point move `incrementalCache` to R2
+// (`r2IncrementalCache` + `withRegionalCache`, ~33k writes/day free) and add an
+// R2 lifecycle rule to bound storage. Do NOT simply reopen and hope.
 //
 // `queue: "direct"` performs ISR revalidation inline on the request that finds a
 // stale entry, instead of dispatching to a Durable Object / self-referencing

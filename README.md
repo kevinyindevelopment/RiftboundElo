@@ -1,142 +1,170 @@
 # Riftbound Elo
 
-A personal-use recreation of [riftelo.com](https://riftelo.com) — a competitive
-**Riftbound** (the League of Legends TCG) ladder. It ingests tournament data from
-the carde.io / UVS "Riftbound Gaming Network" backend, computes an **Elo rating**
-per player, and presents nationwide rankings, player profiles, events, and a
-deck/Legend metagame breakdown.
+A competitive analytics platform for the **Riftbound** (League of Legends TCG)
+ladder. It ingests tournament data from the carde.io / UVS tournament API,
+reconstructs match history, computes a **Glicko-2** rating for every player, and
+serves nationwide rankings, player profiles, event results, and a deck / Legend
+metagame breakdown.
 
-> **For private use only.** RiftELO was taken down after a cease-and-desist from
-> carde.io. This project is intended to run locally for your own analysis. Don't
-> republish or redistribute the ingested data, keep request rates polite, and be
-> aware that scraping may violate carde.io's terms of service. The private API can
-> also change without notice and break ingestion.
+Coverage is deliberately scoped: Michigan stores, California stores, and UVS
+premier / Organized-Play events (Regional Qualifiers and similar). Stores and
+players are grouped into **Tri-Cities**, **Flint**, and **Other**. The dataset
+currently spans ~17.9K events and ~33K players.
+
+**Live:** [kevin-yin.com/riftelo](https://kevin-yin.com/riftelo) — access-gated;
+the deployment is tuned to keep database compute near idle.
 
 ## Stack
 
-- **Next.js 16** (App Router, TypeScript) + **Tailwind v4** — UI & server queries
-- **Prisma 6** + **SQLite** (`dev.db`) — storage (swap `datasource` to Postgres for prod)
-- **tsx** scripts — ingestion, seeding, Elo recompute
+| Layer | Technology |
+| --- | --- |
+| App | Next.js 16 (App Router, TypeScript, Tailwind v4) |
+| Runtime | Cloudflare Workers via the OpenNext adapter |
+| Database | Neon Postgres — Prisma `engineType = "client"` + `@prisma/adapter-neon` |
+| Cache | Cloudflare KV as OpenNext's incremental cache |
+| Pipelines | `tsx` scripts: incremental ingest + deterministic Glicko-2 recompute |
+| Scheduling | GitHub Actions, every 6 hours, concurrency-guarded |
 
-## Quick start
-
-```bash
-npm install            # also runs `prisma generate` (postinstall)
-npm run dev            # http://localhost:3000
-```
-
-**The database is committed to the repo** (`prisma/dev.db`, ~2 MB of public
-Riftbound data), so a fresh clone works immediately with no setup or credentials —
-`npm install && npm run dev` and the ladder is populated. You only need a token to
-*refresh* the data (see below).
-
-To start from an empty DB instead: `npm run db:push` (recreates schema), then either
-`npm run seed` (synthetic demo data) or `npm run ingest:stores` (real data, needs a
-token).
-
-## How the data flows
+## Architecture
 
 ```
-carde.io Hydra API  ──ingest──▶  SQLite (Event/Match/Player/Deck)  ──recompute──▶  Player.rating
-        │                                                                                │
-        └─ public:  /api/magic-events/{id}/             (event meta, format, points)     └─ /  rankings
-        └─ public:  /api/v2/deckbuilder/decks/browse/   (decks, Legend, domains)            /players/[id]
-        └─ auth:    /api/magic-events/{id}/get_all_rounds/   (match results → Elo)           /events/[id]
-        └─ auth:    /api/event-statuses/search/         (registrations/standings)            /decks
+carde.io / UVS tournament API
+        │
+        │  ingest:stores  (incremental, rate-limited, bounded concurrency)
+        ▼
+   Neon Postgres
+   Event · EventEntry · Match · Player · Deck · RatingChange
+        │
+        │  elo:recompute  (full-history deterministic Glicko-2 replay)
+        ▼
+   Player rating snapshots + per-match rating history
+        │
+        ▼
+   Next.js on Cloudflare Workers
+   /rankings  /players/[id]  /events/[id]  /decks  /stores
 ```
 
-The base URL and credentials live in `.env`:
+Writes go to Neon over the **direct** connection; the deployed app reads
+through the **pooled** connection. New results are live on the next request —
+no redeploy required for data changes.
 
-```ini
-DATABASE_URL="file:./dev.db"
-CARDE_API_BASE="https://api.cloudflare.riftbound.uvsgames.com/hydraproxy"
+## Data pipeline
 
-# Match results (who beat whom) are auth-gated. Supply ONE of:
-CARDE_TOKEN=""              # paste an API token, OR
-CARDE_EMAIL=""              # log in with your own carde.io account
-CARDE_PASSWORD=""
+`npm run ingest:stores` is incremental by design. Each event stores the
+provider's `updated_at` timestamp, and a completed event is immutable, so
+unchanged events are skipped outright — no metadata write and no rounds,
+standings, or match fetch. A steady-state sync of the tracked stores takes
+about 40 seconds, versus roughly 10 minutes for a full backfill.
 
-ELO_START="1000"            # rating scale center / seed for new players
-GLICKO_RD_START="350"       # initial rating deviation (uncertainty) for new players
-GLICKO_VOL="0.06"           # initial Glicko-2 volatility
-GLICKO_TAU="0.5"            # system constant: how much volatility can change
-GLICKO_RD_MIN="30"          # RD floor (stops ratings freezing solid)
-GLICKO_RD_ESTABLISHED="110" # at/below this RD a rating is no longer "provisional"
-```
-
-## What's actually reachable
-
-With a normal carde.io player token, for the Riftbound Gaming Network you can read:
-- **Event metadata** nationwide — names, stores, dates, formats, player counts, geo.
-- **Rosters + per-event records + standings** for events that published results
-  (gamer tag, real name, W-L-D, final place, deck Legend).
-- **Head-to-head match pairings** for those events — who played whom and who won —
-  which is what the **Elo ladder** is computed from.
-
-Events that never published results (many casual/learn-to-play events) return empty
-rosters/matches and are stored as metadata only. Bulk-aggregating this data is what
-got the original RiftELO a cease-and-desist, so keep this private.
-
-So this build is a **personal + local-scene tracker**: browse local stores and their
-full event history, with a real Elo ladder from every event that published results.
-
-## Ingesting real data
-
-```bash
-# Incremental sync (DEFAULT): re-syncs the stores already in the DB, refreshes
-# cheap metadata, and SKIPS the expensive result-fetch for completed events whose
-# carde `updated_at` is unchanged. Only new / in-progress / changed events are
-# fetched. A no-op re-run takes ~40s instead of ~10min.
-npm run ingest:stores
-
-npm run ingest:stores -- --discover          # also geo-discover NEW nearby stores
-npm run ingest:stores -- --store 1877 3436   # specific store ids
-npm run ingest:stores -- --near 43.42,-83.95 --miles 40
-npm run ingest:stores -- --full              # force re-fetch everything (ignore skip)
-npm run ingest:stores -- --meta-only         # metadata only, no rosters/matches
-
-npm run elo:recompute                         # rebuild ratings after new matches
-npm run regions                               # (re)assign stores+players to regions
-
-# Inspect what your token can read for a given event id:
-npm run probe -- --event 199693
-```
-
-**Incremental by design:** the ingest always references existing data first and
-never blindly re-fetches. Each event stores carde's `updated_at`; a completed event
-is immutable, so it's skipped on subsequent runs unless it actually changed.
-
-Set `CARDE_TOKEN` in `.env` first (copy `.env.example`; grab the token from a
-`hydraproxy` request's `Authorization: Token …` header while signed in to
-play.carde.io). No token is needed just to view the committed data.
+- Only new or changed events fetch rounds, standings, and head-to-head matches.
+- Events are classified by their own `display_status`, not the query bucket they
+  arrive in (the provider returns some upcoming and canceled events inside the
+  "completed" listing). Canceled events are never result-fetched.
+- Upcoming events get their registration roster refreshed, so player lists are
+  populated before play begins.
+- Requests are globally rate-limited (`INGEST_RPS`) with bounded concurrency
+  (`INGEST_CONCURRENCY`), so a large backfill stays a predictable load on the
+  upstream API.
 
 ## Rating model — Glicko-2
 
-The ladder uses **Glicko-2** (see [`src/lib/glicko.ts`](src/lib/glicko.ts)), not
-plain Elo. Each player carries a rating **plus a rating deviation (RD)** — how
-unsure the system is — and a volatility. New players start with a large RD, so
-their early results move the rating hard; as they play, RD shrinks and the rating
-settles near their true skill. This deliberately avoids classic Elo's failure mode
-where a fixed 1000 seed acts as a soft floor and a beginner's most informative
-(first) games barely move the number.
+Ratings live in [`src/lib/glicko.ts`](src/lib/glicko.ts). Each player carries a
+rating, a **rating deviation** (how uncertain the system is), and a volatility.
+New players start with a large RD so their first results move the rating hard;
+as they play, RD shrinks and the rating settles near their true skill. This
+avoids classic Elo's failure mode where a fixed seed acts as a soft floor and a
+beginner's most informative games barely move the number.
 
-A rating stays **provisional** (shown with a `?`) until RD drops to
-`GLICKO_RD_ESTABLISHED`. The displayed "Elo" is the Glicko mean (rounded, centered
-on `ELO_START`); player pages also show the `± RD` uncertainty.
+- Every match is its own rating period (the granularity lichess uses), so
+  `elo:recompute` replays the entire match history in chronological order.
+- The replay is **deterministic**: the same match data always produces the same
+  ratings, and the full rating history is re-derivable from scratch.
+- Each match writes up to two `RatingChange` rows, which power the rating curve
+  on player pages.
+- A rating stays **provisional** (shown with a `?`) until RD drops to
+  `GLICKO_RD_ESTABLISHED`.
 
-We treat each match as its own rating period (the granularity lichess uses), so
-`elo:recompute` replays **all** matches in chronological order — ratings stay fully
-deterministic and re-derivable from match history, and each match still gets a
-`RatingChange` row to draw the rating curve.
+## Engineering notes
+
+**Incremental ingest.** The routine update path is bounded and cheap in steady
+state: it compares the provider's `updated_at` against the stored value and
+only deep-fetches what actually changed.
+
+**Diff-gated writes.** The recompute diffs inside Postgres
+(`ON CONFLICT ... WHERE IS DISTINCT FROM`) instead of downloading tables to
+diff in application code. That cut per-run egress from ~91 MB to ~22 MB, with
+byte-identical output, and stopped rewriting rows that had not changed — which
+also keeps retained database history from inflating.
+
+**Caching is a cost and availability control here, not just a speed tweak.**
+Every read goes through `cachedQuery` / `unstable_cache` with long TTLs, and
+page segments export `revalidate` rather than `force-dynamic` (which silently
+disables `unstable_cache`). Enabling OpenNext's cache interception returns
+cached responses before the server function runs at all: median render CPU
+dropped from ~550 ms to ~141 ms and the 503 rate fell from ~12% to ~3%.
+
+**Prisma on Workers.** Cloudflare Workers cannot run Prisma's native Rust query
+engine, so the client is generated with `engineType = "client"` (a WASM query
+compiler, no native engine to mismatch) and always constructed with the Neon
+driver adapter. On the app side, `neonConfig.poolQueryViaFetch` makes each query
+a stateless HTTP fetch, and `.prisma/client` is listed in
+`serverExternalPackages` so OpenNext resolves the `workerd` export condition
+instead of trying to read the wasm from disk. See
+[DEPLOYMENT.md](DEPLOYMENT.md) for the full wiring and its failure modes.
+
+**Schema and index tuning against real usage.** The rating-history table uses a
+composite `(playerId, matchId)` primary key instead of a synthetic id, an
+unused 9.8 MB index was dropped after checking its lifetime scan count, and FK
+indexes were added on `Match` so cascade deletes and player lookups stop
+sequential-scanning. `npx tsx scripts/db-audit.ts` reports table sizes and
+per-index scan counts.
 
 ## Scripts
 
 | Command | Description |
-|---|---|
-| `npm run dev` | Run the app |
-| `npm run db:push` / `db:studio` | Sync schema / open Prisma Studio |
-| `npm run seed` | Load synthetic demo data |
-| `npm run ingest:stores -- …` | Pull local store event history from carde.io |
-| `npm run probe -- …` | See what your token can read for given event ids |
-| `npm run ingest -- --decks N` | Pull public featured decks |
-| `npm run elo:recompute` | Recompute every rating from match history |
+| --- | --- |
+| `npm run dev` | Run the app locally |
+| `npm run ingest:stores` | Incremental sync of tracked MI/CA stores |
+| `npm run ingest:stores -- --premier` | Also ingest the UVS Organized-Play events |
+| `npm run ingest:stores -- --discover` | Geo-discover new nearby stores (occasional) |
+| `npm run elo:recompute` | Replay all match history into Glicko-2 ratings |
+| `npm run regions` | Assign stores and players to Tri-Cities / Flint / Other |
+| `npm run probe -- --event <id>` | Inspect what the provider API returns for an event |
+| `npx tsx scripts/db-audit.ts` | Table sizes and index scan counts |
+| `npm run db:export` / `db:import` | Snapshot and restore the database |
+| `npm run neon:tune` | Apply Neon compute settings (dry-run by default) |
+| `npm run cf:build` / `cf:preview` / `cf:deploy` | OpenNext build, preview, deploy |
+
+## Local setup
+
+```bash
+npm install            # also runs `prisma generate` (postinstall)
+cp .env.example .env   # fill in the Neon connection URLs
+npm run dev            # http://localhost:3000
+```
+
+`.env` needs a Neon Postgres `DATABASE_URL` (pooled) and `DIRECT_DATABASE_URL`
+(direct). Ingesting fresh data additionally needs `CARDE_API_BASE` and a
+`CARDE_TOKEN`. Rating and throughput knobs (`ELO_START`, `GLICKO_*`,
+`INGEST_RPS`, `INGEST_CONCURRENCY`) are documented inline in
+[`.env.example`](.env.example).
+
+## Deployment
+
+Production runs on Cloudflare Workers behind the `/riftelo` base path, with
+Neon Postgres. Builds and deploys must run inside WSL — OpenNext's bundler does
+not work on native Windows paths:
+
+```sh
+wsl.exe -e bash -lc "bash /mnt/c/Users/kyin9/Documents/GitHub/RiftboundElo/scripts/deploy.sh"
+```
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the full architecture and
+[COST.md](COST.md) for the cost model that shapes the caching and scheduling
+decisions.
+
+## Disclaimer
+
+Unofficial fan project. Not affiliated with, endorsed by, or sponsored by Riot
+Games, UVS Games, or carde.io. Riftbound and League of Legends are trademarks
+of Riot Games, Inc. Tournament data belongs to its respective owners.

@@ -98,7 +98,7 @@ async function main() {
     });
     q.append("display_statuses", "completed");
     const r = await fetch(`${BASE}/api/v2/events/?${q}`, {
-      headers: { Accept: "application/json", "User-Agent": "RiftboundElo/0.1 (personal use)" },
+      headers: { Accept: "application/json", "User-Agent": "RiftboundElo/0.1" },
     });
     if (!r.ok) throw new Error(`anon event search ${r.status}`);
     return (await r.json()) as Paginated<V2Event>;

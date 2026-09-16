@@ -50,12 +50,38 @@ The site's data coverage is **deliberately scoped**, NOT global:
 (Regional Qualifiers etc.). The ~450 "known stores" already in the DB *are* this
 scope. Regions are split **Tri-Cities / Flint / Other**.
 
-⚠️ **NEVER run a global/worldwide ingest** (`npm run ingest:stores -- --global`).
-Riftbound is globally huge — a **1-day worldwide window is ~59,000 completed
-events**, and `--global` lists ~137k events and serially upserts every one, so it
-runs for **well over an hour** and pulls data the site never displays. This has
-bitten past sessions. If you're "measuring update cost," measure the *scoped*
+⚠️ **Don't run a global/worldwide ingest casually** (`npm run ingest:stores -- --global`).
+`--global` lists every event in the window and serially upserts each one, so it
+runs for **well over an hour** and pulls data the site never displays. If you're
+"measuring update cost," measure the *scoped*
 command the automation actually runs (below), not the biggest variant.
+
+> **Correction (2026-08-19): the old "~59,000 completed events in a 1-day
+> worldwide window" figure in this file was wrong by ~59x, and it had been used
+> to rule global scope out entirely.** It came from a `start_date_after=<1 day
+> ago>` query with **no upper bound**, which sweeps up every *future-scheduled*
+> recurring store event, not one day of play. Bounding the window gives the real
+> rate. Measured against `/api/v2/events/` (anonymous, `page_size=1`, read
+> `total`):
+>
+> | Query | Result |
+> |---|---|
+> | completed, all-time, worldwide | **258,735 events** |
+> | completed, `after=2026-08-18` (unbounded) | 49,400 ← the artifact |
+> | completed, `2026-08-18..2026-08-19` (bounded) | **1,017 events** |
+> | bounded single days, Aug 2026 | 706 – 1,377/day |
+> | bounded single days, Dec 2025 / Mar / Jun 2026 | 290 / 687 / 465 |
+>
+> So worldwide is **~1,000 completed events/day** and **258.7k all-time**, against
+> RiftElo's current ~17.9k — i.e. global is roughly **14x** this database, not
+> three orders of magnitude. Sampled event size worldwide is **mean 12.1 players
+> / median 10** (n=500), implying ~26.6 matches/event, which cross-checks against
+> this DB's measured 27.9. Global all-time is therefore **~6.9M matches**, growing
+> ~9.7M/yr.
+>
+> **When counting anything via this API, always bound the window on both ends**
+> (`start_date_after` AND `start_date_before`), and read `total` from a
+> `page_size=1` response rather than paging.
 
 # Data pipeline (ingest → ratings)
 

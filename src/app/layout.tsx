@@ -10,7 +10,7 @@ const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"]
 
 export const metadata: Metadata = {
   title: "Riftbound Elo",
-  description: "Personal Riftbound competitive rankings, players, decks and events.",
+  description: "Riftbound competitive rankings, players, decks, and events.",
 };
 
 export const viewport: Viewport = {
@@ -59,8 +59,8 @@ export default function RootLayout({
         <main className="flex-1 mx-auto w-full max-w-6xl px-4 py-8">{children}</main>
         <footer className="border-t border-border text-xs text-muted">
           <div className="mx-auto max-w-6xl px-4 py-4">
-            Personal-use Riftbound Elo tracker. Data sourced from carde.io / UVS for
-            private use — not affiliated with Riot Games, UVS Games, or carde.io.
+            Unofficial Riftbound competitive analytics. Not affiliated with,
+            endorsed by, or sponsored by Riot Games, UVS Games, or carde.io.
           </div>
         </footer>
       </body>
