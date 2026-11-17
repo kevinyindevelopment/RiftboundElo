@@ -144,7 +144,7 @@ export function normalizePlayRiftbound(result: RbSearchResult, detail: RbTournam
             isBye: false,
           });
         }
-        if (round.status === "FINALIZED") for (const teamId of round.byeTeamIds) {
+        if (round.status === "FINALIZED") for (const teamId of round.byeTeamIds ?? []) {
           const team = teams.get(teamId);
           if (team?.length !== 1) continue;
           const pid = addPlayer(team[0]);

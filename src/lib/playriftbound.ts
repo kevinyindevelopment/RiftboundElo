@@ -40,7 +40,7 @@ export interface RbRound {
   roundNumber: number;
   status: string;
   startedAt: string | null;
-  byeTeamIds: string[];
+  byeTeamIds: string[] | null;
   matches: RbMatch[];
   endOfRoundStandings: RbStanding[] | null;
 }

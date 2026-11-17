@@ -53,6 +53,12 @@ test("published finalized rounds import even when upstream match status lags", (
   assert.equal(result.store.region, "tri-cities");
 });
 
+test("finalized rounds can omit byes", () => {
+  const { listing, tournament, round } = fixture();
+  round.byeTeamIds = null;
+  assert.equal(normalizePlayRiftbound(listing, tournament).matches.length, 1);
+});
+
 test("unfinished or missing outcomes are never rated as draws", () => {
   const { listing, tournament, round } = fixture();
   round.status = "IN_PROGRESS";
