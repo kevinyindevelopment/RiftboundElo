@@ -15,6 +15,7 @@
     "db:import": "tsx scripts/db-import.ts",
     "ingest": "tsx scripts/ingest.ts",
     "ingest:stores": "tsx scripts/ingest-stores.ts",
+    "ingest:playriftbound": "tsx scripts/ingest-playriftbound.ts",
     "probe": "tsx scripts/probe.ts",
     "regions": "tsx scripts/assign-regions.ts",
     "seed": "tsx scripts/seed.ts",

@@ -8,6 +8,7 @@ import {
 } from "@/lib/queries";
 import { Card, DomainDots, PlayerLink, StatCard } from "@/components/ui";
 import { StatusBadge } from "@/components/events";
+import { eventSource, officialEventUrl } from "@/lib/event-source";
 import { SetBadge } from "@/components/set-tabs";
 import { setForEvent } from "@/lib/sets";
 import { fmtDate, ordinal, pct, teamFormat, winRate } from "@/lib/format";
@@ -149,6 +150,10 @@ export default async function EventPage({
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <a href={officialEventUrl(event.id)} target="_blank" rel="noopener noreferrer"
+            className="text-sm text-accent-2 hover:underline">
+            {eventSource(event.id)} event ↗
+          </a>
           {(event._count.matches > 0 || event.status?.toLowerCase() === "inprogress") && (
             <Link
               href={`/events/${event.id}/live`}

@@ -879,7 +879,10 @@ async function main() {
     // Prefer the stores we already know (reference old data first — never
     // re-discover blindly). Only hit the geo-discovery API when explicitly
     // asked (--discover / --near) or when the DB has no stores yet.
-    const known = (await prisma.store.findMany({ select: { id: true } })).map((s) => Number(s.id));
+    // PlayRiftbound organizers share this table but use a separate namespace.
+    // Never send their UUIDs (or NaN) to the legacy carde API.
+    const known = (await prisma.store.findMany({ select: { id: true } }))
+      .filter((s) => /^\d+$/.test(s.id)).map((s) => Number(s.id));
     if (args.stateGrid) {
       if (!STATE_BBOX[args.stateGrid]) {
         console.error(

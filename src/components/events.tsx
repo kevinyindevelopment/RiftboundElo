@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Card } from "@/components/ui";
 import { fmtDate, fmtDateTime } from "@/lib/format";
 import { LocalTime } from "@/components/local-time";
+import { eventSource } from "@/lib/event-source";
 
 type EventLike = {
   id: string;
@@ -65,6 +66,7 @@ export function EventList({ events }: { events: EventLike[] }) {
             <div className="flex items-center gap-2">
               <span className="font-medium truncate">{e.name}</span>
               <StatusBadge status={e.status} />
+              <span className="text-[10px] text-muted shrink-0">{eventSource(e.id)}</span>
             </div>
             <div className="text-xs text-muted truncate mt-0.5">
               {e.store?.name}

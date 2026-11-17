@@ -5,9 +5,8 @@
 # was the whole problem: the old Windows Task Scheduler job only fired when the
 # work PC happened to be on, so weekends/holidays went stale.
 #
-# Scope: ONLY the tracked Michigan + California stores + UVS premier events (the
-# `ingest:stores` known-store path). NEVER `--global` — worldwide Riftbound is
-# ~59k events/day and would run for hours. See AGENTS.md / project memory.
+# Scope: tracked Michigan + California stores (PlayRiftbound and legacy UVS)
+# plus UVS premier events. NEVER `--global`. See AGENTS.md / COST.md.
 #
 # The scripts write straight to Neon over the direct connection, so no redeploy
 # is needed — the SSR site reads the new data on the next request.
@@ -39,11 +38,14 @@ on:
   workflow_dispatch:
     inputs:
       store_ids:
-        description: >-
-          Space-separated carde store ids to ingest INSTEAD of the routine
-          known-store sync. Leave blank for the normal scoped refresh.
+        description: "Space-separated legacy carde store IDs; blank for routine sync"
         required: false
         type: string
+      playriftbound_only:
+        description: "Refresh only PlayRiftbound (useful for the initial backfill)"
+        required: false
+        default: false
+        type: boolean
 
 # Never let two refreshes overlap (they'd contend on the same Neon writes).
 concurrency:
@@ -71,43 +73,38 @@ jobs:
       # postinstall runs `prisma generate`.
       - run: npm ci
 
+      - name: Validate PlayRiftbound integration
+        run: npx tsx --test src/lib/playriftbound.test.ts
+
       - name: Ingest new results (scoped to tracked stores + premier)
         env:
-          # Via env, not `${{ }}` inline, so the value can't break out of the script.
           STORE_IDS: ${{ inputs.store_ids }}
+          PLAYRIFTBOUND_ONLY: ${{ inputs.playriftbound_only }}
         run: |
           BEFORE=$(npx tsx scripts/match-fingerprint.ts)
           echo "match fingerprint before: $BEFORE"
+          FAILED=0
           if [ -n "$STORE_IDS" ]; then
-            # Ad-hoc: pull named store(s) only.
-            #
-            # Why this exists: carde's location search silently omits some real
-            # venues. Verified for store 64147 (Gen.G Esports x ASU LA GAME
-            # School, Los Angeles) — a 10/25/50-mile search centred on its OWN
-            # coordinates returns none of its events, so --discover / --ca-grid
-            # can never find it, and its 128-player event was invisible to us.
-            # Such a store has to be named by id once; the first ingest writes
-            # the Store row, after which the routine known-store sync (which
-            # reads the Store table) picks the venue up on its own forever.
             case "$STORE_IDS" in
-              "" | *[!0-9\ ]*)
-                echo "store_ids must be space-separated numbers; got: $STORE_IDS"
-                exit 1
-                ;;
+              *[!0-9\ ]*) echo "store_ids must be space-separated numbers"; exit 1 ;;
             esac
-            echo "Targeted ingest of store(s): $STORE_IDS"
-            # Unquoted on purpose: --store takes several ids as separate args.
-            npm run ingest:stores -- --store $STORE_IDS
+            npm run ingest:stores -- --store $STORE_IDS || FAILED=1
           else
-            npm run ingest:stores
-            npm run ingest:stores -- --premier
+            npm run ingest:playriftbound || FAILED=1
+            if [ "$PLAYRIFTBOUND_ONLY" != "true" ]; then
+              npm run ingest:stores || FAILED=1
+              npm run ingest:stores -- --premier || FAILED=1
+            fi
           fi
           AFTER=$(npx tsx scripts/match-fingerprint.ts)
           echo "match fingerprint after:  $AFTER"
           echo "FP_BEFORE=$BEFORE" >> "$GITHUB_ENV"
           echo "FP_AFTER=$AFTER" >> "$GITHUB_ENV"
+          exit "$FAILED"
 
       - name: Recompute ratings (only if match results changed)
+        # An upstream failure must not leave results from the other source unrated.
+        if: ${{ !cancelled() && env.FP_BEFORE != '' && env.FP_AFTER != '' }}
         run: |
           if [ "$FP_BEFORE" != "$FP_AFTER" ]; then
             echo "Match results changed ($FP_BEFORE -> $FP_AFTER) — recomputing."

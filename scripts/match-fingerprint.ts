@@ -3,12 +3,12 @@
  * scheduled update workflow to decide whether a Glicko recompute is needed.
  *
  * The fingerprint is `count:hashsum` where hashsum is an ORDER-INDEPENDENT sum of
- * a per-row hash over the fields that affect ratings (winner + game scores). It
+ * a per-row hash over the fields that affect ratings (players, results and chronology). It
  * changes iff a match was added, removed, OR edited in place (e.g. a store
  * corrects a reported result) — even when the row COUNT stays the same. A plain
  * count would miss same-count corrections.
  *
- * Metadata-only event edits (description, date, etc.) do NOT change this
+ * Metadata-only event edits (description, entry fee, etc.) do NOT change this
  * fingerprint — they don't affect ratings, and they're already reflected on the
  * site by the ingest's own `updated_at` change detection. So we don't waste a
  * recompute on them.
@@ -29,7 +29,10 @@ import { PRE_RIFT_SQL } from "../src/lib/prerift";
     `SELECT count(*)::text || ':' || coalesce(sum(hashtext(
         m.id || '|' || coalesce(m."winnerId", '') || '|' ||
         m."playerOneWins"::text || '|' || m."playerTwoWins"::text || '|' ||
-        m.draws::text || '|' || m."isBye"::text
+        m.draws::text || '|' || m."isBye"::text || '|' ||
+        m."playerOneId" || '|' || m."playerTwoId" || '|' ||
+        coalesce(m."roundNumber"::text, '') || '|' ||
+        coalesce(m."playedAt"::text, '') || '|' || coalesce(e."startDatetime"::text, '')
       )::bigint), 0)::text AS fp
      FROM "Match" m
      JOIN "Event" e ON e.id = m."eventId"
