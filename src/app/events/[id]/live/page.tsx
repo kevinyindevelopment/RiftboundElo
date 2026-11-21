@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getEvent } from "@/lib/queries";
+import { sourceIdFromRoute } from "@/lib/event-source";
 import { winProbability } from "@/lib/glicko";
 import {
   bubbleAnalysis,
@@ -117,7 +118,8 @@ export default async function LiveEventPage({
   params: Promise<{ id: string }>;
   searchParams: Promise<{ sp?: string; pp?: string }>;
 }) {
-  const { id } = await params;
+  const { id: routeId } = await params;
+  const id = sourceIdFromRoute(routeId);
   const { sp, pp } = await searchParams;
   const event = await getEvent(id);
   if (!event) notFound();

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { eventSource, officialEventUrl, playRiftboundId } from "./event-source";
+import { eventSource, officialEventUrl, playRiftboundId, sourceIdFromRoute } from "./event-source";
 import { canonicalPlayerId } from "./player-identity";
 import { normalizePlayRiftbound, searchCenters } from "./playriftbound-normalize";
 import { getPlayRiftboundEvent, searchPlayRiftbound, PlayRiftboundEventUnavailableError, type RbSearchResult, type RbTournament } from "./playriftbound";
@@ -36,6 +36,9 @@ function fixture() {
 }
 
 test("source IDs preserve large integers and never collide with UVS", () => {
+  assert.equal(sourceIdFromRoute("playriftbound%3A117367854865012251"), "playriftbound:117367854865012251");
+  assert.equal(sourceIdFromRoute("playriftbound:117367854865012251"), "playriftbound:117367854865012251");
+  assert.equal(sourceIdFromRoute("411127"), "411127");
   assert.equal(playRiftboundId("117367854865012251"), "playriftbound:117367854865012251");
   assert.equal(eventSource("123"), "UVS (legacy)");
   assert.equal(eventSource(playRiftboundId("123")), "PlayRiftbound");

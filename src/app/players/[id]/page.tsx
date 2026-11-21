@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { canonicalPlayerId } from "@/lib/player-identity";
+import { sourceIdFromRoute } from "@/lib/event-source";
 import {
   getPlayer,
   getPlayerAccomplishments,
@@ -36,7 +37,8 @@ export default async function PlayerPage({
   params: Promise<{ id: string }>;
   searchParams: Promise<{ mp?: string; set?: string }>;
 }) {
-  const { id } = await params;
+  const { id: routeId } = await params;
+  const id = sourceIdFromRoute(routeId);
   const canonicalId = canonicalPlayerId(id);
   if (canonicalId !== id) redirect(`/players/${encodeURIComponent(canonicalId)}`);
   const { mp, set } = await searchParams;

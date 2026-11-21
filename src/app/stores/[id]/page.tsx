@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getStore } from "@/lib/queries";
+import { sourceIdFromRoute } from "@/lib/event-source";
 import { EventList } from "@/components/events";
 import { RegionBadge } from "@/components/region-tabs";
 
@@ -12,7 +13,8 @@ export default async function StorePage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const { id } = await params;
+  const { id: routeId } = await params;
+  const id = sourceIdFromRoute(routeId);
   const store = await getStore(id);
   if (!store) notFound();
 

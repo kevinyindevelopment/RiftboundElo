@@ -8,7 +8,7 @@ import {
 } from "@/lib/queries";
 import { Card, DomainDots, PlayerLink, StatCard } from "@/components/ui";
 import { StatusBadge } from "@/components/events";
-import { eventSource, officialEventUrl } from "@/lib/event-source";
+import { eventSource, officialEventUrl, sourceIdFromRoute } from "@/lib/event-source";
 import { SetBadge } from "@/components/set-tabs";
 import { setForEvent } from "@/lib/sets";
 import { fmtDate, ordinal, pct, teamFormat, winRate } from "@/lib/format";
@@ -95,7 +95,8 @@ export default async function EventPage({
   params: Promise<{ id: string }>;
   searchParams: Promise<{ sp?: string; rp?: string; legend?: string }>;
 }) {
-  const { id } = await params;
+  const { id: routeId } = await params;
+  const id = sourceIdFromRoute(routeId);
   const { sp, rp, legend } = await searchParams;
   const spPage = toPage(sp);
   const rpPage = toPage(rp);
