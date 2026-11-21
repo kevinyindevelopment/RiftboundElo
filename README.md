@@ -110,6 +110,21 @@ Set `CARDE_TOKEN` in `.env` first (copy `.env.example`; grab the token from a
 `hydraproxy` request's `Authorization: Token …` header while signed in to
 play.carde.io). No token is needed just to view the committed data.
 
+## PlayRiftbound and verified player identities
+
+`npm run ingest:playriftbound` imports public events, rosters, standings, and
+results near tracked Michigan and California stores without an API key. Use
+`--since 2026-09-14` for a historical backfill; routine updates cover the last
+21 days and next 60 days. Unavailable source listings preserve existing data
+and do not prevent other events from importing. GitHub Actions runs this
+alongside legacy UVS updates every six hours.
+
+Provider IDs are namespaced to avoid collisions. Accounts are never merged by
+display name. Owner-confirmed links belong in `src/lib/player-identity.ts`.
+For a new link, run `npx tsx scripts/link-player-identities.ts` to preview,
+then add `--apply` and run `npm run elo:recompute`. Future imports use the
+canonical player ID, and old linked profile URLs redirect there.
+
 ## Rating model — Glicko-2
 
 The ladder uses **Glicko-2** (see [`src/lib/glicko.ts`](src/lib/glicko.ts)), not
