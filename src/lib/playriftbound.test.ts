@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { eventSource, officialEventUrl, playRiftboundId } from "./event-source";
 import { canonicalPlayerId } from "./player-identity";
 import { normalizePlayRiftbound, searchCenters } from "./playriftbound-normalize";
-import { getPlayRiftboundEvent, searchPlayRiftbound, type RbSearchResult, type RbTournament } from "./playriftbound";
+import { getPlayRiftboundEvent, searchPlayRiftbound, PlayRiftboundEventUnavailableError, type RbSearchResult, type RbTournament } from "./playriftbound";
 
 function fixture() {
   const one = { id: "riot-a", displayName: "Alpha", tagLine: "NA1" };
@@ -149,5 +149,9 @@ test("public API pagination stops at upper bound and fails closed on errors", as
     await assert.rejects(getPlayRiftboundEvent("123"), /Query changed/);
     globalThis.fetch = async () => Response.json({ data: { competeTournaments: [{ id: "123" }] } });
     await assert.rejects(getPlayRiftboundEvent("123"), /Incomplete/);
+    globalThis.fetch = async () => Response.json({ errors: [{ message: 'upstream: {"errorCode":"RESOURCE_NOT_FOUND"}' }] });
+    await assert.rejects(getPlayRiftboundEvent("123"), PlayRiftboundEventUnavailableError);
+    globalThis.fetch = async () => Response.json({ errors: [{ message: "Unauthorized" }] });
+    await assert.rejects(getPlayRiftboundEvent("123"), error => !(error instanceof PlayRiftboundEventUnavailableError));
   } finally { globalThis.fetch = original; }
 });

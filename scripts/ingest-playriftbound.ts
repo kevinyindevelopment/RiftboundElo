@@ -6,7 +6,7 @@
 import "dotenv/config";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../src/lib/prisma";
-import { getPlayRiftboundEvent, searchPlayRiftbound, type RbSearchResult } from "../src/lib/playriftbound";
+import { getPlayRiftboundEvent, searchPlayRiftbound, PlayRiftboundEventUnavailableError, type RbSearchResult } from "../src/lib/playriftbound";
 import { isTrackedState, normalizePlayRiftbound, searchCenters } from "../src/lib/playriftbound-normalize";
 import { PLAYRIFTBOUND_PREFIX } from "../src/lib/event-source";
 
@@ -101,13 +101,22 @@ async function main() {
   }
   console.log(`Found ${found.size} unique MI/CA events; fetching public results.`);
   const batches: Batch[] = [];
+  let unavailable = 0;
   for (const row of found.values()) {
-    const detail = await getPlayRiftboundEvent(row.tournament.id);
-    batches.push(normalizePlayRiftbound(row, detail, now));
+    try {
+      const detail = await getPlayRiftboundEvent(row.tournament.id);
+      batches.push(normalizePlayRiftbound(row, detail, now));
+    } catch (error) {
+      if (!(error instanceof PlayRiftboundEventUnavailableError)) throw error;
+      unavailable++;
+      console.warn(`${error.message}; retaining existing data`);
+      continue;
+    }
     if (batches.length % 100 === 0) console.log(`Fetched ${batches.length}/${found.size} events.`);
   }
   console.log(JSON.stringify({
     events: batches.length,
+    unavailable,
     stores: new Set(batches.map(b => b.store.id)).size,
     players: new Set(batches.flatMap(b => b.players.map(p => p.id))).size,
     entries: batches.reduce((n, b) => n + b.entries.length, 0),

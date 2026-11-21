@@ -78,6 +78,10 @@ export interface RbSearchResult {
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** A stale listing can reference a removed/private tournament. Preserve its
+ * existing data, but allow other public events in the batch to be refreshed.
+ */
+export class PlayRiftboundEventUnavailableError extends Error {}
 let nextRequestAt = 0;
 async function request<T>(operation: keyof typeof OPERATIONS, variables: Record<string, unknown>): Promise<T> {
   const slot = Math.max(nextRequestAt, Date.now());
@@ -106,6 +110,10 @@ async function request<T>(operation: keyof typeof OPERATIONS, variables: Record<
       continue;
     }
     const payload = await response.json() as { data?: T; errors?: { message: string }[] };
+    if (operation === "GetCompeteTournamentForRiftboundPlayer" &&
+        (response.status === 404 || payload.errors?.some(e => e.message.includes('"errorCode":"RESOURCE_NOT_FOUND"')))) {
+      throw new PlayRiftboundEventUnavailableError(`PlayRiftbound event ${variables.tournamentId} is unavailable`);
+    }
     if (!response.ok || payload.errors?.length || !payload.data) {
       throw new Error(`PlayRiftbound ${operation} (${response.status}): ${payload.errors?.map(e => e.message).join("; ") ?? "missing data"}`);
     }
