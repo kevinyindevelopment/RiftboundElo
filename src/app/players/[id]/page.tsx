@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { canonicalPlayerId } from "@/lib/player-identity";
 import {
   getPlayer,
   getPlayerAccomplishments,
@@ -36,6 +37,8 @@ export default async function PlayerPage({
   searchParams: Promise<{ mp?: string; set?: string }>;
 }) {
   const { id } = await params;
+  const canonicalId = canonicalPlayerId(id);
+  if (canonicalId !== id) redirect(`/players/${encodeURIComponent(canonicalId)}`);
   const { mp, set } = await searchParams;
   const matchPage = Number(mp) >= 1 ? Math.floor(Number(mp)) : 1;
   const activeSet = isSetCode(set) ? set : undefined;

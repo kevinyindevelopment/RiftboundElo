@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { eventSource, officialEventUrl, playRiftboundId } from "./event-source";
+import { canonicalPlayerId } from "./player-identity";
 import { normalizePlayRiftbound, searchCenters } from "./playriftbound-normalize";
 import { getPlayRiftboundEvent, searchPlayRiftbound, type RbSearchResult, type RbTournament } from "./playriftbound";
 
@@ -40,6 +41,19 @@ test("source IDs preserve large integers and never collide with UVS", () => {
   assert.equal(eventSource(playRiftboundId("123")), "PlayRiftbound");
   assert.match(officialEventUrl(playRiftboundId("117367854865012251")), /\/117367854865012251$/);
   assert.throws(() => playRiftboundId(117367854865012251 as unknown as string));
+});
+
+test("verified identities retain the legacy profile across imports", () => {
+  const { listing, tournament, round } = fixture();
+  const player = round.matches[0].teams[0].players[0];
+  player.id = "01a0a1d7-e1d7-771a-85b5-d96837e2d893";
+  const result = normalizePlayRiftbound(listing, tournament);
+  assert.equal(result.players[0].id, "411127");
+  assert.equal(result.entries[0].playerId, "411127");
+  assert.equal(result.matches[0].playerOneId, "411127");
+  assert.equal(result.matches[0].winnerId, "411127");
+  assert.equal(canonicalPlayerId(playRiftboundId(player.id)), "411127");
+  assert.equal(canonicalPlayerId("playriftbound:unverified"), "playriftbound:unverified");
 });
 
 test("published finalized rounds import even when upstream match status lags", () => {

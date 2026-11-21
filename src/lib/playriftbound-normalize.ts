@@ -3,6 +3,7 @@ import type { RbPlayer, RbSearchResult, RbStanding, RbTournament } from "./playr
 import { officialEventUrl, playRiftboundId } from "./event-source";
 import { regionForStore } from "./regions";
 import { isPreRiftEvent } from "./prerift";
+import { canonicalPlayerId } from "./player-identity";
 
 export function isTrackedState(state?: string | null): boolean {
   return ["mi", "michigan", "ca", "california"].includes(state?.trim().toLowerCase() ?? "");
@@ -83,7 +84,7 @@ export function normalizePlayRiftbound(result: RbSearchResult, detail: RbTournam
   const entries = new Map<string, Prisma.EventEntryCreateManyInput>();
   const teams = new Map<string, RbPlayer[]>();
   const addPlayer = (player: RbPlayer) => {
-    const pid = playRiftboundId(player.id);
+    const pid = canonicalPlayerId(playRiftboundId(player.id));
     players.set(pid, { id: pid, displayName: player.displayName,
       handle: player.tagLine ? `${player.displayName}#${player.tagLine}` : player.displayName,
       country: "US", region });
